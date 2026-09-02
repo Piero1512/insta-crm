@@ -1,113 +1,106 @@
 // app/page.tsx
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
 import { supabase } from '@/lib/supabase';
-import { Lead } from '@/types/crm';
 import { 
   Users, 
-  DollarSign, 
   MapPin, 
+  DollarSign, 
   TrendingUp, 
-  CheckCircle2, 
   Clock, 
-  AlertCircle,
-  PhoneCall,
-  ArrowUpRight
+  CheckCircle2, 
+  FileText,
+  Building,
+  PieChart,
+  BarChart3
 } from 'lucide-react';
-import Link from 'next/link';
-
-interface DashboardStats {
-  totalLeads: number;
-  newLeads: number;
-  completedVisits: number;
-  totalQuoted: number;
-  acceptedQuoted: number;
-  averageMargin: number;
-  conversionRate: number;
-}
 
 export default function Dashboard() {
-  const [stats, setStats] = useState<DashboardStats>({
+  const [stats, setStats] = useState({
     totalLeads: 0,
-    newLeads: 0,
-    completedVisits: 0,
+    totalVisits: 0,
     totalQuoted: 0,
-    acceptedQuoted: 0,
-    averageMargin: 0,
-    conversionRate: 0,
+    totalProfit: 0,
+    avgMargin: 0,
+    wonQuotes: 0,
+    sentQuotes: 0,
+    draftQuotes: 0,
+    rejectedQuotes: 0,
+    miamiLeads: 0,
+    browardLeads: 0,
+    palmBeachLeads: 0,
   });
-  const [recentLeads, setRecentLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetchDashboardData = async () => {
+    const fetchDashboardMetrics = async () => {
       setLoading(true);
 
-      // 1. Obtener leads
-      const { data: leadsData } = await supabase
-        .from('leads')
-        .select('*')
-        .order('created_at', { ascending: false });
+      const [{ data: leads }, { data: visits }, { data: quotes }] = await Promise.all([
+        supabase.from('leads').select('id, location_county, status'),
+        supabase.from('site_visits').select('id'),
+        supabase.from('quotes').select('total_amount, cost_materials, cost_labor, cost_transport, cost_other, status'),
+      ]);
 
-      // 2. Obtener visitas
-      const { data: visitsData } = await supabase
-        .from('site_visits')
-        .select('id');
+      const allLeads = leads || [];
+      const allVisits = visits || [];
+      const allQuotes = quotes || [];
 
-      // 3. Obtener presupuestos
-      const { data: quotesData } = await supabase
-        .from('quotes')
-        .select('*');
+      // Conteo por condados
+      const miami = allLeads.filter((l) => l.location_county === 'miami-dade').length;
+      const broward = allLeads.filter((l) => l.location_county === 'broward').length;
+      const palmBeach = allLeads.filter((l) => l.location_county === 'palm beach').length;
 
-      const leads = leadsData || [];
-      const visits = visitsData || [];
-      const quotes = quotesData || [];
+      // Conteo por estados de presupuesto
+      const won = allQuotes.filter((q) => q.status === 'accepted');
+      const sent = allQuotes.filter((q) => q.status === 'sent').length;
+      const draft = allQuotes.filter((q) => q.status === 'draft').length;
+      const rejected = allQuotes.filter((q) => q.status === 'rejected').length;
 
-      // Cálculos de Leads
-      const totalLeadsCount = leads.length;
-      const newLeadsCount = leads.filter(l => l.status === 'nuevo').length;
-      const wonLeadsCount = leads.filter(l => l.status === 'cerrado_ganado' || l.status === 'presupuestado').length;
-      const convRate = totalLeadsCount > 0 ? ((wonLeadsCount / totalLeadsCount) * 100).toFixed(1) : 0;
+      // Cálculos financieros
+      const totalQuoted = allQuotes.reduce((acc, q) => acc + (Number(q.total_amount) || 0), 0);
+      const totalCosts = allQuotes.reduce((acc, q) => {
+        return (
+          acc +
+          (Number(q.cost_materials) || 0) +
+          (Number(q.cost_labor) || 0) +
+          (Number(q.cost_transport) || 0) +
+          (Number(q.cost_other) || 0)
+        );
+      }, 0);
 
-      // Cálculos Financieros
-      let totalAmountSum = 0;
-      let acceptedAmountSum = 0;
-      let totalCostSum = 0;
-
-      quotes.forEach(q => {
-        const total = Number(q.total_amount) || 0;
-        const costs = (Number(q.cost_materials) || 0) + (Number(q.cost_labor) || 0) + (Number(q.cost_transport) || 0) + (Number(q.cost_other) || 0);
-        
-        totalAmountSum += total;
-        totalCostSum += costs;
-
-        if (q.status === 'accepted') {
-          acceptedAmountSum += total;
-        }
-      });
-
-      const totalProfit = totalAmountSum - totalCostSum;
-      const avgMargin = totalAmountSum > 0 ? ((totalProfit / totalAmountSum) * 100).toFixed(1) : 0;
+      const totalProfit = totalQuoted - totalCosts;
+      const avgMargin = totalQuoted > 0 ? (totalProfit / totalQuoted) * 100 : 0;
 
       setStats({
-        totalLeads: totalLeadsCount,
-        newLeads: newLeadsCount,
-        completedVisits: visits.length,
-        totalQuoted: totalAmountSum,
-        acceptedQuoted: acceptedAmountSum,
-        averageMargin: Number(avgMargin),
-        conversionRate: Number(convRate),
+        totalLeads: allLeads.length,
+        totalVisits: allVisits.length,
+        totalQuoted,
+        totalProfit,
+        avgMargin,
+        wonQuotes: won.length,
+        sentQuotes: sent,
+        draftQuotes: draft,
+        rejectedQuotes: rejected,
+        miamiLeads: miami,
+        browardLeads: broward,
+        palmBeachLeads: palmBeach,
       });
 
-      setRecentLeads(leads.slice(0, 5));
       setLoading(false);
     };
 
-    fetchDashboardData();
+    fetchDashboardMetrics();
   }, []);
+
+  // Cálculos relativos
+  const totalLeadsCount = stats.totalLeads || 1;
+  const pctMiami = Math.round((stats.miamiLeads / totalLeadsCount) * 100);
+  const pctBroward = Math.round((stats.browardLeads / totalLeadsCount) * 100);
+  const pctPalmBeach = Math.round((stats.palmBeachLeads / totalLeadsCount) * 100);
 
   return (
     <div className="flex min-h-screen bg-slate-50">
@@ -116,226 +109,162 @@ export default function Dashboard() {
       <div className="flex-1 flex flex-col min-w-0">
         <Header />
 
-        <main className="flex-1 p-8 overflow-y-auto">
-          {/* Bienvenida y Título */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-            <div>
-              <h2 className="text-2xl font-bold text-slate-800">Panel de Control General</h2>
-              <p className="text-sm text-slate-500">
-                Resumen ejecutivo de operaciones, conversión y finanzas en tiempo real
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
-              <Link
-                href="/leads"
-                className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium shadow-sm transition-colors"
-              >
-                <Users className="w-4 h-4" />
-                Gestionar Leads
-              </Link>
-            </div>
+        <main className="flex-1 p-8 overflow-y-auto space-y-8">
+          {/* Bienvenida */}
+          <div>
+            <h2 className="text-2xl font-bold text-slate-800">Panel de Control Ejecutivo</h2>
+            <p className="text-sm text-slate-500">
+              Resumen operativo y comercial de obras en Miami-Dade, Broward y Palm Beach
+            </p>
           </div>
 
-          {/* Tarjetas de Métricas (KPIs) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
-            {/* Total Cotizado */}
-            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-slate-500 uppercase">Volumen Cotizado</span>
-                <span className="p-2 bg-blue-50 text-blue-600 rounded-lg">
-                  <DollarSign className="w-5 h-5" />
-                </span>
+          {/* 4 KPIs Principales */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center gap-4">
+              <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
+                <Users className="w-6 h-6" />
               </div>
-              <div className="mt-4">
+              <div>
+                <p className="text-xs font-semibold text-slate-500 uppercase">Total Prospectos</p>
+                <h3 className="text-2xl font-bold text-slate-800">{loading ? '...' : stats.totalLeads}</h3>
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center gap-4">
+              <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
+                <MapPin className="w-6 h-6" />
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-slate-500 uppercase">Inspecciones GPS</p>
+                <h3 className="text-2xl font-bold text-slate-800">{loading ? '...' : stats.totalVisits}</h3>
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center gap-4">
+              <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
+                <DollarSign className="w-6 h-6" />
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-slate-500 uppercase">Total Cotizado</p>
                 <h3 className="text-2xl font-bold text-slate-800">
-                  ${stats.totalQuoted.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  {loading ? '...' : `$${stats.totalQuoted.toLocaleString('en-US', { maximumFractionDigits: 0 })}`}
                 </h3>
-                <p className="text-xs text-emerald-600 mt-1 flex items-center gap-1 font-medium">
-                  <ArrowUpRight className="w-3.5 h-3.5" />
-                  Margen promedio estimado: {stats.averageMargin}%
-                </p>
               </div>
             </div>
 
-            {/* Leads Totales */}
-            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-slate-500 uppercase">Total Prospectos</span>
-                <span className="p-2 bg-indigo-50 text-indigo-600 rounded-lg">
-                  <Users className="w-5 h-5" />
-                </span>
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center gap-4">
+              <div className="p-3 bg-amber-50 text-amber-600 rounded-xl">
+                <TrendingUp className="w-6 h-6" />
               </div>
-              <div className="mt-4">
-                <h3 className="text-2xl font-bold text-slate-800">{stats.totalLeads}</h3>
-                <p className="text-xs text-slate-500 mt-1">
-                  <span className="font-semibold text-amber-600">{stats.newLeads} nuevos</span> por contactar
-                </p>
-              </div>
-            </div>
-
-            {/* Visitas GPS Realizadas */}
-            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-slate-500 uppercase">Visitas en Terreno</span>
-                <span className="p-2 bg-emerald-50 text-emerald-600 rounded-lg">
-                  <MapPin className="w-5 h-5" />
-                </span>
-              </div>
-              <div className="mt-4">
-                <h3 className="text-2xl font-bold text-slate-800">{stats.completedVisits}</h3>
-                <p className="text-xs text-emerald-600 mt-1 flex items-center gap-1 font-medium">
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  Auditoría GPS 100% verificada
-                </p>
-              </div>
-            </div>
-
-            {/* Tasa de Conversión */}
-            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-slate-500 uppercase">Efectividad de Cierre</span>
-                <span className="p-2 bg-amber-50 text-amber-600 rounded-lg">
-                  <TrendingUp className="w-5 h-5" />
-                </span>
-              </div>
-              <div className="mt-4">
-                <h3 className="text-2xl font-bold text-slate-800">{stats.conversionRate}%</h3>
-                <p className="text-xs text-slate-500 mt-1">
-                  Leads convertidos a cotización
-                </p>
+              <div>
+                <p className="text-xs font-semibold text-slate-500 uppercase">Margen Proyectado</p>
+                <h3 className="text-2xl font-bold text-slate-800">
+                  {loading ? '...' : `${stats.avgMargin.toFixed(1)}%`}
+                </h3>
               </div>
             </div>
           </div>
 
-          {/* Grilla Central: Actividad Reciente y Accesos Rápidos */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            {/* Tabla de Leads Recientes */}
-            <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="p-6 border-b border-slate-100 flex items-center justify-between">
-                <div>
-                  <h3 className="font-bold text-slate-800 text-base">Últimos Prospectos Ingresados</h3>
-                  <p className="text-xs text-slate-400">Seguimiento en tiempo real de leads y protocolo 4+4</p>
-                </div>
-                <Link
-                  href="/leads"
-                  className="text-xs font-semibold text-blue-600 hover:underline flex items-center gap-1"
-                >
-                  Ver todos <ArrowUpRight className="w-3.5 h-3.5" />
-                </Link>
+          {/* Bloque de Análisis Visual */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Gráfico de Barras: Distribución Territorial */}
+            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-5">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                  <BarChart3 className="w-4 h-4 text-blue-600" />
+                  Distribución de Obras por Condado
+                </h3>
+                <span className="text-xs text-slate-400 font-medium">Mercado Sur de la Florida</span>
               </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                      <th className="py-3 px-6">Cliente / Servicio</th>
-                      <th className="py-3 px-6">Condado & Zip</th>
-                      <th className="py-3 px-6">Protocolo 4+4</th>
-                      <th className="py-3 px-6 text-right">Estado</th>
-                    </tr>
-                  </thead>
-                  <tbody className="text-sm divide-y divide-slate-100">
-                    {loading ? (
-                      <tr>
-                        <td colSpan={4} className="py-6 text-center text-slate-400">
-                          Sincronizando con base de datos...
-                        </td>
-                      </tr>
-                    ) : recentLeads.length === 0 ? (
-                      <tr>
-                        <td colSpan={4} className="py-6 text-center text-slate-500">
-                          No hay prospectos aún en el sistema.
-                        </td>
-                      </tr>
-                    ) : (
-                      recentLeads.map((lead) => (
-                        <tr key={lead.id} className="hover:bg-slate-50/70 transition-colors">
-                          <td className="py-3.5 px-6">
-                            <div className="font-semibold text-slate-800">{lead.client_name}</div>
-                            <div className="text-xs text-slate-400">{lead.service_type}</div>
-                          </td>
-                          <td className="py-3.5 px-6 text-xs text-slate-600">
-                            {lead.location_county} {lead.zip_code && `(${lead.zip_code})`}
-                          </td>
-                          <td className="py-3.5 px-6">
-                            <div className="flex items-center gap-1.5 text-xs">
-                              <span className="px-2 py-0.5 bg-slate-100 font-semibold rounded text-slate-700">
-                                📞 {lead.calls_count}/4
-                              </span>
-                              <span className="px-2 py-0.5 bg-slate-100 font-semibold rounded text-slate-700">
-                                💬 {lead.messages_count}/4
-                              </span>
-                            </div>
-                          </td>
-                          <td className="py-3.5 px-6 text-right">
-                            <span className="capitalize px-2.5 py-1 bg-blue-50 text-blue-700 border border-blue-200 rounded-full text-xs font-semibold">
-                              {lead.status.replace('_', ' ')}
-                            </span>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
+              <div className="space-y-4 pt-2">
+                {/* Miami-Dade */}
+                <div>
+                  <div className="flex justify-between text-xs font-semibold text-slate-700 mb-1">
+                    <span>Miami-Dade County</span>
+                    <span>{stats.miamiLeads} leads ({pctMiami}%)</span>
+                  </div>
+                  <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
+                    <div
+                      className="bg-blue-600 h-3 rounded-full transition-all duration-500"
+                      style={{ width: `${pctMiami}%` }}
+                    ></div>
+                  </div>
+                </div>
+
+                {/* Broward */}
+                <div>
+                  <div className="flex justify-between text-xs font-semibold text-slate-700 mb-1">
+                    <span>Broward County</span>
+                    <span>{stats.browardLeads} leads ({pctBroward}%)</span>
+                  </div>
+                  <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
+                    <div
+                      className="bg-emerald-500 h-3 rounded-full transition-all duration-500"
+                      style={{ width: `${pctBroward}%` }}
+                    ></div>
+                  </div>
+                </div>
+
+                {/* Palm Beach */}
+                <div>
+                  <div className="flex justify-between text-xs font-semibold text-slate-700 mb-1">
+                    <span>Palm Beach County</span>
+                    <span>{stats.palmBeachLeads} leads ({pctPalmBeach}%)</span>
+                  </div>
+                  <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
+                    <div
+                      className="bg-purple-600 h-3 rounded-full transition-all duration-500"
+                      style={{ width: `${pctPalmBeach}%` }}
+                    ></div>
+                  </div>
+                </div>
               </div>
             </div>
 
-            {/* Accesos Rápidos del Flujo de Trabajo */}
-            <div className="space-y-6">
-              <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-xl p-6 text-white shadow-sm">
-                <h4 className="font-bold text-base mb-1">Flujo Operativo de la CRM</h4>
-                <p className="text-xs text-slate-400 mb-6">
-                  Gestiona el ciclo de vida completo de cada servicio contratado.
-                </p>
+            {/* Embudo de Conversión Comercial (Funnel) */}
+            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-5">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                  <PieChart className="w-4 h-4 text-emerald-600" />
+                  Embudo de Cierre Operativo
+                </h3>
+                <span className="text-xs text-slate-400 font-medium">Ciclo de Venta</span>
+              </div>
 
-                <div className="space-y-3">
-                  <Link
-                    href="/leads"
-                    className="flex items-center justify-between p-3 bg-slate-800/80 hover:bg-slate-700/80 rounded-lg border border-slate-700 transition-colors"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-blue-500/20 text-blue-400 rounded">
-                        <PhoneCall className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <p className="text-xs font-semibold">1. Prospectar Lead</p>
-                        <p className="text-[11px] text-slate-400">Regla 4 llamadas + 4 mensajes</p>
-                      </div>
-                    </div>
-                    <ArrowUpRight className="w-4 h-4 text-slate-400" />
-                  </Link>
+              <div className="grid grid-cols-2 gap-3 pt-2">
+                <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+                  <div className="flex items-center gap-2 text-slate-500 text-xs mb-1">
+                    <Users className="w-3.5 h-3.5 text-blue-500" />
+                    <span>Prospectos</span>
+                  </div>
+                  <p className="text-xl font-bold text-slate-800">{stats.totalLeads}</p>
+                </div>
 
-                  <Link
-                    href="/visits"
-                    className="flex items-center justify-between p-3 bg-slate-800/80 hover:bg-slate-700/80 rounded-lg border border-slate-700 transition-colors"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-emerald-500/20 text-emerald-400 rounded">
-                        <MapPin className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <p className="text-xs font-semibold">2. Inspección Técnica</p>
-                        <p className="text-[11px] text-slate-400">Verificación GPS en sitio</p>
-                      </div>
-                    </div>
-                    <ArrowUpRight className="w-4 h-4 text-slate-400" />
-                  </Link>
+                <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+                  <div className="flex items-center gap-2 text-slate-500 text-xs mb-1">
+                    <MapPin className="w-3.5 h-3.5 text-emerald-500" />
+                    <span>Visitas GPS</span>
+                  </div>
+                  <p className="text-xl font-bold text-slate-800">{stats.totalVisits}</p>
+                </div>
 
-                  <Link
-                    href="/quotes"
-                    className="flex items-center justify-between p-3 bg-slate-800/80 hover:bg-slate-700/80 rounded-lg border border-slate-700 transition-colors"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-amber-500/20 text-amber-400 rounded">
-                        <DollarSign className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <p className="text-xs font-semibold">3. Cotización & Margen</p>
-                        <p className="text-[11px] text-slate-400">Desglose de costos directos</p>
-                      </div>
-                    </div>
-                    <ArrowUpRight className="w-4 h-4 text-slate-400" />
-                  </Link>
+                <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+                  <div className="flex items-center gap-2 text-slate-500 text-xs mb-1">
+                    <FileText className="w-3.5 h-3.5 text-amber-500" />
+                    <span>Presupuestos</span>
+                  </div>
+                  <p className="text-xl font-bold text-slate-800">
+                    {stats.draftQuotes + stats.sentQuotes + stats.wonQuotes + stats.rejectedQuotes}
+                  </p>
+                </div>
+
+                <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-100">
+                  <div className="flex items-center gap-2 text-emerald-700 text-xs mb-1 font-semibold">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Cierres Ganados</span>
+                  </div>
+                  <p className="text-xl font-bold text-emerald-700">{stats.wonQuotes}</p>
                 </div>
               </div>
             </div>
