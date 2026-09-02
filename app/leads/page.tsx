@@ -1,7 +1,7 @@
 // app/leads/page.tsx
 'use client';
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import AppLayout from '@/components/AppLayout';
 import ConfirmModal from '@/components/ConfirmModal';
 import { supabase } from '@/lib/supabase';
@@ -26,6 +26,7 @@ import {
   Camera,
   AlertCircle,
   BellRing,
+  Send,
   X
 } from 'lucide-react';
 
@@ -40,16 +41,22 @@ export default function LeadsPage() {
   const [coordinators, setCoordinators] = useState<CoordinatorOption[]>([]);
   const [loading, setLoading] = useState(true);
   
-  // Alerta en vivo de nuevo lead
+  // Banner flotante para notificación Realtime
   const [newLeadBanner, setNewLeadBanner] = useState<string | null>(null);
 
-  // Modales
+  // Modales generales
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
   const [leadToDelete, setLeadToDelete] = useState<Lead | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // Modal Rápido de Visita Técnica desde Leads
+  // Modal WhatsApp Personalizable
+  const [whatsAppLead, setWhatsAppLead] = useState<Lead | null>(null);
+  const [waCountryPrefix, setWaCountryPrefix] = useState('+1');
+  const [waCustomPhone, setWaCustomPhone] = useState('');
+  const [waMessageBody, setWaMessageBody] = useState('');
+
+  // Modal Visita Técnica Rápida
   const [quickVisitLead, setQuickVisitLead] = useState<Lead | null>(null);
   const [quickNotes, setQuickNotes] = useState('');
   const [quickLat, setQuickLat] = useState<number | null>(null);
@@ -104,7 +111,7 @@ export default function LeadsPage() {
   useEffect(() => {
     fetchData();
 
-    // ⚡ Suscripción en Tiempo Real para nuevos leads (Realtime Supabase)
+    // Suscripción Realtime para avisar de prospectos entrantes
     const channel = supabase
       .channel('public:leads')
       .on(
@@ -114,8 +121,8 @@ export default function LeadsPage() {
           const newRecord = payload.new as Lead;
           setLeads((prev) => [newRecord, ...prev]);
           playNotificationSound();
-          setNewLeadBanner(`¡Nuevo Lead Entrante! ${newRecord.client_name} (${newRecord.service_type})`);
-          setTimeout(() => setNewLeadBanner(null), 7000);
+          setNewLeadBanner(`¡Nuevo Lead Recibido! ${newRecord.client_name} - ${newRecord.service_type}`);
+          setTimeout(() => setNewLeadBanner(null), 8000);
         }
       )
       .subscribe();
@@ -125,24 +132,171 @@ export default function LeadsPage() {
     };
   }, []);
 
-  // WhatsApp automático con plantilla y registro de interacción
-  const handleOpenWhatsApp = async (lead: Lead) => {
-    // Normalizar número telefónico (quitar guiones, espacios y asegurar código de país +1 si es USA)
-    let cleanPhone = lead.phone.replace(/\D/g, '');
-    if (cleanPhone.length === 10) cleanPhone = '1' + cleanPhone;
+  // --- LÓGICA DE WHATSAPP DINÁMICO ---
+  const handleOpenWhatsAppModal = (lead: Lead) => {
+    setWhatsAppLead(lead);
 
-    const message = `Hola ${lead.client_name}, le saludamos de Insta CRM Florida Contractors. Recibimos su solicitud para ${lead.service_type}. ¿A qué hora le resultaría conveniente que coordinemos una breve llamada o visita técnica a su propiedad?`;
-    const whatsappUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
+    const raw = lead.phone.trim();
+    // Detección automática de prefijo si ya viene escrito
+    if (raw.startsWith('+57')) {
+      setWaCountryPrefix('+57');
+      setWaCustomPhone(raw.replace('+57', '').trim());
+    } else if (raw.startsWith('+52')) {
+      setWaCountryPrefix('+52');
+      setWaCustomPhone(raw.replace('+52', '').trim());
+    } else if (raw.startsWith('+34')) {
+      setWaCountryPrefix('+34');
+      setWaCustomPhone(raw.replace('+34', '').trim());
+    } else if (raw.startsWith('+1')) {
+      setWaCountryPrefix('+1');
+      setWaCustomPhone(raw.replace('+1', '').trim());
+    } else {
+      setWaCountryPrefix('+1'); // Predeterminado USA/Florida
+      setWaCustomPhone(raw);
+    }
 
-    // Abrir WhatsApp en pestaña nueva
-    window.open(whatsappUrl, '_blank');
+    setWaMessageBody(
+      `Hola ${lead.client_name}, le saludamos de Insta CRM Florida Contractors. Recibimos su solicitud para ${lead.service_type}. ¿A qué hora le resultaría conveniente coordinar una breve llamada o inspección técnica a su propiedad?`
+    );
+  };
 
-    // Incrementar contador de mensajes y puntos de score automáticamente
-    if (lead.messages_count < 4) {
-      await handleIncrementInteraction(lead, 'message');
+  const handleSendWhatsApp = async () => {
+    if (!whatsAppLead) return;
+
+    // Limpiar dígitos del teléfono y prefijo
+    const cleanNumber = waCustomPhone.replace(/\D/g, '');
+    const cleanPrefix = waCountryPrefix.replace(/\D/g, '');
+    
+    // Si no seleccionó prefijo o el número ya lo tenía, enviar directo
+    const fullPhoneNumber = cleanPrefix ? `${cleanPrefix}${cleanNumber}` : cleanNumber;
+
+    const targetUrl = `https://wa.me/${fullPhoneNumber}?text=${encodeURIComponent(waMessageBody)}`;
+    window.open(targetUrl, '_blank');
+
+    // Registrar interacción en el protocolo 4+4 si no ha alcanzado 4
+    if (whatsAppLead.messages_count < 4) {
+      await handleIncrementInteraction(whatsAppLead, 'message');
+    }
+
+    setWhatsAppLead(null);
+  };
+
+  // --- LÓGICA DE INTERACCIONES Y PUNTUACIÓN ---
+  const handleIncrementInteraction = async (lead: Lead, type: 'call' | 'message') => {
+    const currentCalls = lead.calls_count;
+    const currentMessages = lead.messages_count;
+
+    const newCalls = type === 'call' ? currentCalls + 1 : currentCalls;
+    const newMessages = type === 'message' ? currentMessages + 1 : currentMessages;
+
+    if (type === 'call' && currentCalls >= 4) return;
+    if (type === 'message' && currentMessages >= 4) return;
+
+    const { score, temperature } = calculateScore({
+      service_type: lead.service_type,
+      location_county: lead.location_county,
+      budget_range: lead.budget_range,
+      calls_count: newCalls,
+      messages_count: newMessages,
+    });
+
+    const updateData = {
+      calls_count: newCalls,
+      messages_count: newMessages,
+      status: 'en_seguimiento',
+      lead_score: score,
+      temperature: temperature,
+    };
+
+    const { error } = await supabase.from('leads').update(updateData).eq('id', lead.id);
+    if (!error) {
+      setLeads((prev) =>
+        prev.map((l) => (l.id === lead.id ? { ...l, ...updateData, status: 'en_seguimiento' } : l))
+      );
     }
   };
 
+  // --- LÓGICA DE VISITA TÉCNICA RÁPIDA ---
+  const handleOpenQuickVisit = (lead: Lead) => {
+    setQuickVisitLead(lead);
+    setQuickNotes('');
+    setQuickFiles([]);
+    setQuickGpsError('');
+    setQuickLat(null);
+    setQuickLng(null);
+    handleGetQuickLocation();
+  };
+
+  const handleGetQuickLocation = () => {
+    setGettingLocation(true);
+    setQuickGpsError('');
+
+    if (!navigator.geolocation) {
+      setQuickGpsError('Geolocalización no soportada en este navegador');
+      setGettingLocation(false);
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setQuickLat(pos.coords.latitude);
+        setQuickLng(pos.coords.longitude);
+        setGettingLocation(false);
+      },
+      (err) => {
+        setQuickGpsError('Error al fijar GPS: ' + err.message);
+        setGettingLocation(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
+
+  const handleSaveQuickVisit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quickVisitLead || !quickLat || !quickLng) {
+      alert('La coordenada satelital GPS es obligatoria para validar la visita.');
+      return;
+    }
+
+    setSavingQuickVisit(true);
+
+    const photoUrls: string[] = [];
+    for (const file of quickFiles) {
+      const ext = file.name.split('.').pop();
+      const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${ext}`;
+      const filePath = `visits/${fileName}`;
+      const { error: uploadError } = await supabase.storage.from('visit-photos').upload(filePath, file);
+      if (!uploadError) {
+        const { data: { publicUrl } } = supabase.storage.from('visit-photos').getPublicUrl(filePath);
+        photoUrls.push(publicUrl);
+      }
+    }
+
+    const { error: visitError } = await supabase.from('site_visits').insert([
+      {
+        lead_id: quickVisitLead.id,
+        latitude: quickLat,
+        longitude: quickLng,
+        evaluation_notes: quickNotes || 'Inspección técnica reportada de forma rápida desde la bandeja comercial.',
+        visited_at: new Date().toISOString(),
+        photos: photoUrls,
+      }
+    ]);
+
+    if (visitError) {
+      alert('Error al guardar visita: ' + visitError.message);
+      setSavingQuickVisit(false);
+      return;
+    }
+
+    await supabase.from('leads').update({ status: 'visita_realizada' }).eq('id', quickVisitLead.id);
+
+    setSavingQuickVisit(false);
+    setQuickVisitLead(null);
+    fetchData();
+  };
+
+  // --- CREAR Y ACTUALIZAR LEADS ---
   const handleCreateLead = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -254,123 +408,7 @@ export default function LeadsPage() {
     }
   };
 
-  const handleIncrementInteraction = async (lead: Lead, type: 'call' | 'message') => {
-    const currentCalls = lead.calls_count;
-    const currentMessages = lead.messages_count;
-
-    const newCalls = type === 'call' ? currentCalls + 1 : currentCalls;
-    const newMessages = type === 'message' ? currentMessages + 1 : currentMessages;
-
-    if (type === 'call' && currentCalls >= 4) return;
-    if (type === 'message' && currentMessages >= 4) return;
-
-    const { score, temperature } = calculateScore({
-      service_type: lead.service_type,
-      location_county: lead.location_county,
-      budget_range: lead.budget_range,
-      calls_count: newCalls,
-      messages_count: newMessages,
-    });
-
-    const updateData = {
-      calls_count: newCalls,
-      messages_count: newMessages,
-      status: 'en_seguimiento',
-      lead_score: score,
-      temperature: temperature,
-    };
-
-    const { error } = await supabase.from('leads').update(updateData).eq('id', lead.id);
-    if (!error) {
-      setLeads((prev) =>
-        prev.map((l) => (l.id === lead.id ? { ...l, ...updateData, status: 'en_seguimiento' } : l))
-      );
-    }
-  };
-
-  // --- LÓGICA DE REGISTRO RÁPIDO DE VISITA TÉCNICA ---
-  const handleOpenQuickVisit = (lead: Lead) => {
-    setQuickVisitLead(lead);
-    setQuickNotes('');
-    setQuickFiles([]);
-    setQuickGpsError('');
-    setQuickLat(null);
-    setQuickLng(null);
-    handleGetQuickLocation();
-  };
-
-  const handleGetQuickLocation = () => {
-    setGettingLocation(true);
-    setQuickGpsError('');
-
-    if (!navigator.geolocation) {
-      setQuickGpsError('Geolocalización no soportada');
-      setGettingLocation(false);
-      return;
-    }
-
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setQuickLat(pos.coords.latitude);
-        setQuickLng(pos.coords.longitude);
-        setGettingLocation(false);
-      },
-      (err) => {
-        setQuickGpsError('Error al capturar GPS: ' + err.message);
-        setGettingLocation(false);
-      },
-      { enableHighAccuracy: true, timeout: 10000 }
-    );
-  };
-
-  const handleSaveQuickVisit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!quickVisitLead || !quickLat || !quickLng) {
-      alert('Se requiere captura GPS obligatoria.');
-      return;
-    }
-
-    setSavingQuickVisit(true);
-
-    // Subir fotos si seleccionó
-    const photoUrls: string[] = [];
-    for (const file of quickFiles) {
-      const ext = file.name.split('.').pop();
-      const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${ext}`;
-      const filePath = `visits/${fileName}`;
-      const { error: uploadError } = await supabase.storage.from('visit-photos').upload(filePath, file);
-      if (!uploadError) {
-        const { data: { publicUrl } } = supabase.storage.from('visit-photos').getPublicUrl(filePath);
-        photoUrls.push(publicUrl);
-      }
-    }
-
-    // Insertar reporte de visita
-    const { error: visitError } = await supabase.from('site_visits').insert([
-      {
-        lead_id: quickVisitLead.id,
-        latitude: quickLat,
-        longitude: quickLng,
-        evaluation_notes: quickNotes || 'Inspección técnica registrada directamente desde bandeja de leads.',
-        visited_at: new Date().toISOString(),
-        photos: photoUrls,
-      }
-    ]);
-
-    if (visitError) {
-      alert('Error al registrar visita: ' + visitError.message);
-      setSavingQuickVisit(false);
-      return;
-    }
-
-    // Actualizar estado del lead a visita_realizada
-    await supabase.from('leads').update({ status: 'visita_realizada' }).eq('id', quickVisitLead.id);
-
-    setSavingQuickVisit(false);
-    setQuickVisitLead(null);
-    fetchData();
-  };
-
+  // Filtros de búsqueda
   const filteredLeads = useMemo(() => {
     return leads.filter((lead) => {
       const query = searchQuery.toLowerCase().trim();
@@ -446,7 +484,7 @@ export default function LeadsPage() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        {/* Banner de Notificación en Vivo */}
+        {/* Notificación Flotante Realtime */}
         {newLeadBanner && (
           <div className="bg-blue-600 text-white p-3.5 rounded-xl shadow-lg flex items-center justify-between animate-bounce">
             <div className="flex items-center gap-2.5 text-xs sm:text-sm font-semibold">
@@ -463,7 +501,7 @@ export default function LeadsPage() {
           <div>
             <h2 className="text-xl sm:text-2xl font-bold text-slate-800">Leads & Prospectos</h2>
             <p className="text-xs sm:text-sm text-slate-500">
-              Respuesta en tiempo real, WhatsApp directo y asignación express de visitas en terreno
+              Captación en vivo, WhatsApp personalizado y registro de visitas satelitales en terreno
             </p>
           </div>
           <button
@@ -475,12 +513,12 @@ export default function LeadsPage() {
           </button>
         </div>
 
-        {/* Filtros */}
+        {/* Barra de Filtros */}
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-slate-700 uppercase flex items-center gap-1.5">
               <Filter className="w-3.5 h-3.5 text-blue-600" />
-              Filtros Multicriterio & Segmentación
+              Filtros & Segmentación
             </span>
             {hasActiveFilters && (
               <button
@@ -564,7 +602,7 @@ export default function LeadsPage() {
           </div>
         </div>
 
-        {/* Tabla Enriquecida con WhatsApp y Visita Rápida */}
+        {/* Tabla Principal */}
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="p-4 sm:p-6 border-b border-slate-100 flex items-center justify-between">
             <h3 className="font-bold text-slate-800 text-sm sm:text-base">Bandeja de Prospectos</h3>
@@ -574,7 +612,7 @@ export default function LeadsPage() {
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse min-w-[800px]">
+            <table className="w-full text-left border-collapse min-w-[850px]">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase tracking-wider">
                   <th className="py-3 px-4">Cliente / Contacto</th>
@@ -582,7 +620,7 @@ export default function LeadsPage() {
                   <th className="py-3 px-4">Ubicación</th>
                   <th className="py-3 px-4">Protocolo 4+4</th>
                   <th className="py-3 px-4">Estado</th>
-                  <th className="py-3 px-4 text-center">Visita Express</th>
+                  <th className="py-3 px-4 text-center">Inspección</th>
                   <th className="py-3 px-4 text-right">Acciones</th>
                 </tr>
               </thead>
@@ -596,7 +634,7 @@ export default function LeadsPage() {
                 ) : filteredLeads.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="py-8 text-center text-slate-500">
-                      No se encontraron leads con los filtros seleccionados.
+                      No se encontraron prospectos con los filtros seleccionados.
                     </td>
                   </tr>
                 ) : (
@@ -637,12 +675,11 @@ export default function LeadsPage() {
                       </td>
 
                       <td className="py-3 px-4">
-                        <span className="capitalize px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-full text-xs font-semibold">
+                        <span className="capitalize px-2.5 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-full text-xs font-semibold">
                           {lead.status.replace('_', ' ')}
                         </span>
                       </td>
 
-                      {/* Botón rápido para asignar/reportar visita sin salir de la vista */}
                       <td className="py-3 px-4 text-center">
                         <button
                           onClick={() => handleOpenQuickVisit(lead)}
@@ -655,17 +692,17 @@ export default function LeadsPage() {
                       </td>
 
                       <td className="py-3 px-4 text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          {/* Botón WhatsApp Directo */}
+                        <div className="flex items-center justify-end gap-1.5">
+                          {/* Botón WhatsApp Personalizable */}
                           <button
-                            onClick={() => handleOpenWhatsApp(lead)}
-                            title="Abrir chat de WhatsApp con plantilla personalizada"
+                            onClick={() => handleOpenWhatsAppModal(lead)}
+                            title="Enviar WhatsApp personalizado"
                             className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded transition-colors"
                           >
                             <MessageSquare className="w-4 h-4 fill-emerald-100" />
                           </button>
 
-                          {/* Incrementar llamada manual */}
+                          {/* Contador manual de llamada */}
                           <button
                             onClick={() => handleIncrementInteraction(lead, 'call')}
                             disabled={lead.calls_count >= 4}
@@ -701,7 +738,88 @@ export default function LeadsPage() {
         </div>
       </div>
 
-      {/* Modal Express: Reportar Visita Técnica sin salir de Leads */}
+      {/* MODAL WHATSAPP: CONFIGURACIÓN DE PREFIJO Y MENSAJE */}
+      {whatsAppLead && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-emerald-50/60">
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
+                <h3 className="font-bold text-slate-800 text-sm sm:text-base">
+                  Enviar WhatsApp a {whatsAppLead.client_name}
+                </h3>
+              </div>
+              <button onClick={() => setWhatsAppLead(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 uppercase mb-1.5">
+                  Prefijo de País & Número Celular
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <select
+                    value={waCountryPrefix}
+                    onChange={(e) => setWaCountryPrefix(e.target.value)}
+                    className="px-2.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 text-xs focus:outline-none"
+                  >
+                    <option value="+1">🇺🇸 +1 (USA/FL)</option>
+                    <option value="+57">🇨🇴 +57 (Colombia)</option>
+                    <option value="+52">🇲🇽 +52 (México)</option>
+                    <option value="+34">🇪🇸 +34 (España)</option>
+                    <option value="+58">🇻🇪 +58 (Venezuela)</option>
+                    <option value="">Otro / Sin prefijo</option>
+                  </select>
+                  <input
+                    type="text"
+                    value={waCustomPhone}
+                    onChange={(e) => setWaCustomPhone(e.target.value)}
+                    placeholder="Número de teléfono"
+                    className="sm:col-span-2 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-semibold focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Puedes modificar el código de país o editar el número si el cliente lo proporcionó diferente.
+                </p>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 uppercase mb-1.5">
+                  Mensaje Personalizado
+                </label>
+                <textarea
+                  rows={4}
+                  value={waMessageBody}
+                  onChange={(e) => setWaMessageBody(e.target.value)}
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:outline-none focus:border-emerald-500 leading-relaxed text-xs"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2.5 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setWhatsAppLead(null)}
+                  className="px-4 py-2.5 rounded-xl text-slate-600 hover:bg-slate-100 font-semibold text-xs"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSendWhatsApp}
+                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold shadow-md shadow-emerald-600/20 flex items-center gap-2 text-xs transition-colors"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>Abrir WhatsApp (+1 msj)</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL VISITA EXPRESS (GPS + CÁMARA) */}
       {quickVisitLead && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-200">
@@ -709,7 +827,7 @@ export default function LeadsPage() {
               <div>
                 <h3 className="font-bold text-slate-800 text-sm sm:text-base flex items-center gap-2">
                   <CalendarPlus className="w-4 h-4 text-indigo-600" />
-                  Visita Técnica Directa
+                  Inspección Técnica en Sitio
                 </h3>
                 <p className="text-xs text-slate-500">
                   {quickVisitLead.client_name} • {quickVisitLead.service_type}
@@ -721,7 +839,6 @@ export default function LeadsPage() {
             </div>
 
             <form onSubmit={handleSaveQuickVisit} className="p-6 space-y-4">
-              {/* Señal GPS */}
               <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-slate-700 uppercase flex items-center gap-1.5">
@@ -746,15 +863,14 @@ export default function LeadsPage() {
                 ) : (
                   <div className="text-xs text-amber-700 bg-amber-50 p-2.5 rounded-lg border border-amber-200 flex items-center gap-2">
                     <AlertCircle className="w-4 h-4 shrink-0" />
-                    <span>{quickGpsError || 'Obteniendo coordenadas del terreno...'}</span>
+                    <span>{quickGpsError || 'Obteniendo coordenadas satelitales...'}</span>
                   </div>
                 )}
               </div>
 
-              {/* Fotos del sitio */}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                  Fotos del Inmueble / Proyecto
+                  Fotos del Inmueble
                 </label>
                 <div className="border-2 border-dashed border-slate-200 rounded-xl p-3 text-center bg-slate-50/50 hover:border-blue-400 transition-colors">
                   <input
@@ -768,16 +884,15 @@ export default function LeadsPage() {
                   <label htmlFor="quick-visit-photos" className="cursor-pointer flex flex-col items-center gap-1">
                     <Camera className="w-5 h-5 text-slate-400" />
                     <span className="text-xs font-semibold text-blue-600 hover:underline">
-                      Tomar con cámara o subir fotos
+                      Tomar foto con cámara o adjuntar archivos
                     </span>
                     <span className="text-[11px] text-slate-400">
-                      {quickFiles.length > 0 ? `${quickFiles.length} imagen(es) seleccionada(s)` : 'Opcional'}
+                      {quickFiles.length > 0 ? `${quickFiles.length} foto(s) seleccionada(s)` : 'Opcional'}
                     </span>
                   </label>
                 </div>
               </div>
 
-              {/* Notas de inspección */}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                   Notas de Inspección & Medidas
@@ -788,7 +903,7 @@ export default function LeadsPage() {
                   onChange={(e) => setQuickNotes(e.target.value)}
                   placeholder="Detalles observados, metrajes, estado actual..."
                   className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800 focus:outline-none"
-                ></textarea>
+                />
               </div>
 
               <div className="flex justify-end gap-3 pt-3 border-t border-slate-200">
@@ -812,7 +927,7 @@ export default function LeadsPage() {
         </div>
       )}
 
-      {/* Modal Crear Lead */}
+      {/* MODAL CREAR LEAD */}
       {isCreateModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-lg overflow-hidden border border-slate-200">
@@ -901,7 +1016,7 @@ export default function LeadsPage() {
                   <select
                     value={serviceType}
                     onChange={(e) => setServiceType(e.target.value)}
-                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800"
+                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none text-slate-800"
                   >
                     <option value="Remodelación de Baño">Remodelación de Baño</option>
                     <option value="Remodelación de Cocina">Remodelación de Cocina</option>
@@ -916,7 +1031,7 @@ export default function LeadsPage() {
                   <select
                     value={locationCounty}
                     onChange={(e) => setLocationCounty(e.target.value as County)}
-                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800"
+                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none text-slate-800"
                   >
                     <option value="miami-dade">Miami-Dade</option>
                     <option value="broward">Broward</option>
@@ -983,7 +1098,7 @@ export default function LeadsPage() {
         </div>
       )}
 
-      {/* Modal Editar Lead */}
+      {/* MODAL EDITAR LEAD */}
       {editingLead && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-lg overflow-hidden border border-slate-200">
@@ -1004,7 +1119,7 @@ export default function LeadsPage() {
                   required
                   value={editClientName}
                   onChange={(e) => setEditClientName(e.target.value)}
-                  className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800"
+                  className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none text-slate-800"
                 />
               </div>
 
@@ -1016,7 +1131,7 @@ export default function LeadsPage() {
                     required
                     value={editPhone}
                     onChange={(e) => setEditPhone(e.target.value)}
-                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800"
+                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none text-slate-800"
                   />
                 </div>
                 <div>
@@ -1025,7 +1140,7 @@ export default function LeadsPage() {
                     type="email"
                     value={editEmail}
                     onChange={(e) => setEditEmail(e.target.value)}
-                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800"
+                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none text-slate-800"
                   />
                 </div>
               </div>
@@ -1081,7 +1196,7 @@ export default function LeadsPage() {
         </div>
       )}
 
-      {/* Modal Confirmar Eliminación */}
+      {/* CONFIRMAR ELIMINACIÓN */}
       <ConfirmModal
         isOpen={Boolean(leadToDelete)}
         title="¿Eliminar este prospecto?"
