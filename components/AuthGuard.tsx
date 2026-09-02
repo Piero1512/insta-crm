@@ -5,42 +5,37 @@ import { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 
-interface AuthGuardProps {
-  children: React.ReactNode;
-}
+// 1. RUTAS PÚBLICAS: No exigen inicio de sesión
+const PUBLIC_PATHS = ['/login', '/quote-request'];
 
-export default function AuthGuard({ children }: AuthGuardProps) {
+export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [authorized, setAuthorized] = useState(false);
 
   useEffect(() => {
-    // Si ya está en /login, permitir acceso inmediato sin verificar
-    if (pathname === '/login') {
-      setIsAuthenticated(true);
+    // Si la ruta actual es pública (como el formulario de clientes o el login), permitir paso inmediato
+    const isPublic = PUBLIC_PATHS.some((path) => pathname.startsWith(path));
+    if (isPublic) {
+      setAuthorized(true);
       return;
     }
 
+    // Si es una ruta privada del CRM, verificar sesión de Supabase
     const checkAuth = async () => {
       const { data: { session } } = await supabase.auth.getSession();
-
       if (!session) {
-        setIsAuthenticated(false);
         router.push('/login');
       } else {
-        setIsAuthenticated(true);
+        setAuthorized(true);
       }
     };
 
     checkAuth();
 
-    // Escuchar cambios de estado en tiempo real (ej. logout)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session && pathname !== '/login') {
-        setIsAuthenticated(false);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!session && !PUBLIC_PATHS.some((path) => pathname.startsWith(path))) {
         router.push('/login');
-      } else if (session && pathname === '/login') {
-        router.push('/');
       }
     });
 
@@ -49,22 +44,10 @@ export default function AuthGuard({ children }: AuthGuardProps) {
     };
   }, [pathname, router]);
 
-  // Si está en /login se renderiza de inmediato
-  if (pathname === '/login') {
-    return <>{children}</>;
-  }
-
-  // Estado de carga mientras verifica sesión
-  if (isAuthenticated === null) {
-    return (
-      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white">
-        <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-        <p className="text-xs text-slate-400 font-medium">Verificando credenciales de acceso...</p>
-      </div>
-    );
-  }
-
-  if (!isAuthenticated) {
+  // Si aún no se autoriza o está redirigiendo en ruta privada, no renderizar contenido protegido
+  if (!authorized) {
+    const isPublic = PUBLIC_PATHS.some((path) => pathname.startsWith(path));
+    if (isPublic) return <>{children}</>;
     return null;
   }
 
