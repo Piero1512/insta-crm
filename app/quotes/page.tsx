@@ -4,19 +4,23 @@
 import { useState, useEffect } from 'react';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
+import ConfirmModal from '@/components/ConfirmModal';
 import { supabase } from '@/lib/supabase';
 import { Lead } from '@/types/crm';
 import { 
   Plus, 
   DollarSign, 
-  TrendingUp, 
   FileSpreadsheet, 
   CheckCircle2, 
   Clock, 
   XCircle, 
   Send, 
   X,
-  Calculator
+  Calculator,
+  Printer,
+  FileText,
+  Edit2,
+  Trash2
 } from 'lucide-react';
 
 interface QuoteRecord {
@@ -31,8 +35,12 @@ interface QuoteRecord {
   created_at: string;
   leads?: {
     client_name: string;
+    phone: string;
+    email: string;
     service_type: string;
     location_county: string;
+    zip_code: string;
+    address?: string;
   };
 }
 
@@ -40,9 +48,15 @@ export default function QuotesPage() {
   const [quotes, setQuotes] = useState<QuoteRecord[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
-  const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // Formulario Presupuesto
+  // Modales
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [selectedQuoteForPdf, setSelectedQuoteForPdf] = useState<QuoteRecord | null>(null);
+  const [editingQuote, setEditingQuote] = useState<QuoteRecord | null>(null);
+  const [quoteToDelete, setQuoteToDelete] = useState<QuoteRecord | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // Formulario Crear Presupuesto
   const [selectedLeadId, setSelectedLeadId] = useState('');
   const [totalAmount, setTotalAmount] = useState<number>(0);
   const [costMaterials, setCostMaterials] = useState<number>(0);
@@ -51,12 +65,24 @@ export default function QuotesPage() {
   const [costOther, setCostOther] = useState<number>(0);
   const [status, setStatus] = useState<'draft' | 'sent' | 'accepted' | 'rejected'>('draft');
 
-  // Cálculos dinámicos
+  // Formulario Editar Presupuesto
+  const [editTotalAmount, setEditTotalAmount] = useState<number>(0);
+  const [editCostMaterials, setEditCostMaterials] = useState<number>(0);
+  const [editCostLabor, setEditCostLabor] = useState<number>(0);
+  const [editCostTransport, setEditCostTransport] = useState<number>(0);
+  const [editCostOther, setEditCostOther] = useState<number>(0);
+  const [editStatus, setEditStatus] = useState<'draft' | 'sent' | 'accepted' | 'rejected'>('draft');
+
+  // Cálculos dinámicos (Crear)
   const totalCosts = (Number(costMaterials) || 0) + (Number(costLabor) || 0) + (Number(costTransport) || 0) + (Number(costOther) || 0);
   const netProfit = (Number(totalAmount) || 0) - totalCosts;
   const marginPercentage = Number(totalAmount) > 0 ? ((netProfit / Number(totalAmount)) * 100).toFixed(1) : '0';
 
-  // Cargar presupuestos y leads desde Supabase
+  // Cálculos dinámicos (Editar)
+  const editTotalCosts = (Number(editCostMaterials) || 0) + (Number(editCostLabor) || 0) + (Number(editCostTransport) || 0) + (Number(editCostOther) || 0);
+  const editNetProfit = (Number(editTotalAmount) || 0) - editTotalCosts;
+  const editMarginPercentage = Number(editTotalAmount) > 0 ? ((editNetProfit / Number(editTotalAmount)) * 100).toFixed(1) : '0';
+
   const fetchData = async () => {
     setLoading(true);
 
@@ -74,8 +100,12 @@ export default function QuotesPage() {
         created_at,
         leads (
           client_name,
+          phone,
+          email,
           service_type,
-          location_county
+          location_county,
+          zip_code,
+          address
         )
       `)
       .order('created_at', { ascending: false });
@@ -98,7 +128,6 @@ export default function QuotesPage() {
     fetchData();
   }, []);
 
-  // Crear Presupuesto
   const handleCreateQuote = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -124,10 +153,8 @@ export default function QuotesPage() {
       return;
     }
 
-    // Actualizar estado del lead a 'presupuestado'
     await supabase.from('leads').update({ status: 'presupuestado' }).eq('id', selectedLeadId);
 
-    // Resetear formulario
     setIsModalOpen(false);
     setTotalAmount(0);
     setCostMaterials(0);
@@ -137,10 +164,69 @@ export default function QuotesPage() {
     fetchData();
   };
 
-  // Actualizar estado de cotización directo en tabla
+  const handleOpenEdit = (quote: QuoteRecord) => {
+    setEditingQuote(quote);
+    setEditTotalAmount(Number(quote.total_amount) || 0);
+    setEditCostMaterials(Number(quote.cost_materials) || 0);
+    setEditCostLabor(Number(quote.cost_labor) || 0);
+    setEditCostTransport(Number(quote.cost_transport) || 0);
+    setEditCostOther(Number(quote.cost_other) || 0);
+    setEditStatus(quote.status);
+  };
+
+  const handleUpdateQuote = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingQuote) return;
+
+    if (Number(editTotalAmount) <= 0) {
+      alert('El monto cotizado debe ser mayor a 0.');
+      return;
+    }
+
+    const { error } = await supabase
+      .from('quotes')
+      .update({
+        total_amount: Number(editTotalAmount),
+        cost_materials: Number(editCostMaterials) || 0,
+        cost_labor: Number(editCostLabor) || 0,
+        cost_transport: Number(editCostTransport) || 0,
+        cost_other: Number(editCostOther) || 0,
+        status: editStatus,
+      })
+      .eq('id', editingQuote.id);
+
+    if (error) {
+      alert('Error al actualizar el presupuesto: ' + error.message);
+      return;
+    }
+
+    setEditingQuote(null);
+    fetchData();
+  };
+
+  const handleConfirmDeleteQuote = async () => {
+    if (!quoteToDelete) return;
+    setIsDeleting(true);
+
+    const { error } = await supabase.from('quotes').delete().eq('id', quoteToDelete.id);
+
+    setIsDeleting(false);
+
+    if (error) {
+      alert('Error al eliminar presupuesto: ' + error.message);
+    } else {
+      setQuotes((prev) => prev.filter((q) => q.id !== quoteToDelete.id));
+      setQuoteToDelete(null);
+    }
+  };
+
   const handleUpdateStatus = async (quoteId: string, newStatus: 'draft' | 'sent' | 'accepted' | 'rejected') => {
     const { error } = await supabase.from('quotes').update({ status: newStatus }).eq('id', quoteId);
     if (!error) fetchData();
+  };
+
+  const handlePrint = () => {
+    window.print();
   };
 
   const getStatusBadge = (st: string) => {
@@ -160,16 +246,20 @@ export default function QuotesPage() {
 
   return (
     <div className="flex min-h-screen bg-slate-50">
-      <Sidebar />
+      <div className="print:hidden">
+        <Sidebar />
+      </div>
 
       <div className="flex-1 flex flex-col min-w-0">
-        <Header />
+        <div className="print:hidden">
+          <Header />
+        </div>
 
-        <main className="flex-1 p-8 overflow-y-auto">
+        <main className="flex-1 p-8 overflow-y-auto print:p-0 print:m-0">
           {/* Encabezado */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8 print:hidden">
             <div>
-              <h2 className="text-2xl font-bold text-slate-800">Presupuestos & Cotizaciones</h2>
+              <h2 className="text-2xl font-bold text-slate-800">Presupuestos & Finanzas</h2>
               <p className="text-sm text-slate-500">
                 Estructura de costos directos, márgenes y utilidad proyectada por servicio
               </p>
@@ -184,7 +274,7 @@ export default function QuotesPage() {
           </div>
 
           {/* Tabla de Presupuestos */}
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden print:hidden">
             <div className="p-6 border-b border-slate-100 flex items-center justify-between">
               <h3 className="font-bold text-slate-800 text-base">Historial de Cotizaciones</h3>
               <span className="text-xs font-semibold px-2.5 py-1 bg-slate-100 text-slate-600 rounded-full">
@@ -201,7 +291,7 @@ export default function QuotesPage() {
                     <th className="py-3.5 px-6">Costos Directos</th>
                     <th className="py-3.5 px-6">Utilidad Estimada</th>
                     <th className="py-3.5 px-6">Estado</th>
-                    <th className="py-3.5 px-6 text-right">Acción</th>
+                    <th className="py-3.5 px-6 text-right">Acciones</th>
                   </tr>
                 </thead>
                 <tbody className="text-sm divide-y divide-slate-100">
@@ -214,7 +304,7 @@ export default function QuotesPage() {
                   ) : quotes.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="py-8 text-center text-slate-500">
-                        No hay presupuestos creados aún. Haz clic en <strong>"Nuevo Presupuesto"</strong> para cotizar un proyecto.
+                        No hay presupuestos creados aún. Haz clic en <strong>"Nuevo Presupuesto"</strong>.
                       </td>
                     </tr>
                   ) : (
@@ -250,16 +340,42 @@ export default function QuotesPage() {
                             {getStatusBadge(quote.status)}
                           </td>
                           <td className="py-4 px-6 text-right">
-                            <select
-                              value={quote.status}
-                              onChange={(e) => handleUpdateStatus(quote.id, e.target.value as any)}
-                              className="text-xs bg-slate-50 border border-slate-200 rounded px-2 py-1 text-slate-700 font-medium focus:outline-none focus:border-blue-500"
-                            >
-                              <option value="draft">Borrador</option>
-                              <option value="sent">Enviado</option>
-                              <option value="accepted">Aceptado</option>
-                              <option value="rejected">No Aceptado</option>
-                            </select>
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => setSelectedQuoteForPdf(quote)}
+                                title="Ver Cotización Formal / Exportar PDF"
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-blue-50 text-blue-700 hover:bg-blue-100 rounded transition-colors"
+                              >
+                                <FileText className="w-3.5 h-3.5" /> PDF
+                              </button>
+
+                              <select
+                                value={quote.status}
+                                onChange={(e) => handleUpdateStatus(quote.id, e.target.value as any)}
+                                className="text-xs bg-slate-50 border border-slate-200 rounded px-2 py-1 text-slate-700 font-medium focus:outline-none focus:border-blue-500"
+                              >
+                                <option value="draft">Borrador</option>
+                                <option value="sent">Enviado</option>
+                                <option value="accepted">Aceptado</option>
+                                <option value="rejected">No Aceptado</option>
+                              </select>
+
+                              <button
+                                onClick={() => handleOpenEdit(quote)}
+                                title="Editar presupuesto"
+                                className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded transition-colors"
+                              >
+                                <Edit2 className="w-4 h-4" />
+                              </button>
+
+                              <button
+                                onClick={() => setQuoteToDelete(quote)}
+                                title="Eliminar presupuesto"
+                                className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -274,7 +390,7 @@ export default function QuotesPage() {
 
       {/* Modal Nuevo Presupuesto */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 print:hidden">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-xl overflow-hidden border border-slate-200">
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
               <h3 className="font-bold text-slate-800 flex items-center gap-2">
@@ -305,7 +421,6 @@ export default function QuotesPage() {
                 </select>
               </div>
 
-              {/* Grid de Costos */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600 uppercase mb-1">
@@ -365,7 +480,6 @@ export default function QuotesPage() {
                 </div>
               </div>
 
-              {/* Precio de Venta y Estado */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
@@ -399,7 +513,6 @@ export default function QuotesPage() {
                 </div>
               </div>
 
-              {/* Resumen Financiero en Tiempo Real */}
               <div className="p-4 bg-slate-900 text-white rounded-xl flex items-center justify-between">
                 <div>
                   <p className="text-[11px] text-slate-400 uppercase">Costos Directos</p>
@@ -436,6 +549,263 @@ export default function QuotesPage() {
           </div>
         </div>
       )}
+
+      {/* Modal Editar Presupuesto */}
+      {editingQuote && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 print:hidden">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-xl overflow-hidden border border-slate-200">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+              <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                <Edit2 className="w-5 h-5 text-amber-600" />
+                Editar Cotización — {editingQuote.leads?.client_name}
+              </h3>
+              <button onClick={() => setEditingQuote(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateQuote} className="p-6 space-y-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 uppercase mb-1">
+                    Materiales ($)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={editCostMaterials || ''}
+                    onChange={(e) => setEditCostMaterials(parseFloat(e.target.value) || 0)}
+                    className="w-full px-2.5 py-1.5 text-sm bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-500 text-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 uppercase mb-1">
+                    Mano de Obra ($)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={editCostLabor || ''}
+                    onChange={(e) => setEditCostLabor(parseFloat(e.target.value) || 0)}
+                    className="w-full px-2.5 py-1.5 text-sm bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-500 text-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 uppercase mb-1">
+                    Transporte ($)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={editCostTransport || ''}
+                    onChange={(e) => setEditCostTransport(parseFloat(e.target.value) || 0)}
+                    className="w-full px-2.5 py-1.5 text-sm bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-500 text-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 uppercase mb-1">
+                    Otros / Varios ($)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={editCostOther || ''}
+                    onChange={(e) => setEditCostOther(parseFloat(e.target.value) || 0)}
+                    className="w-full px-2.5 py-1.5 text-sm bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-500 text-slate-800"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                    Total Cotizado al Cliente ($) *
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min="1"
+                    step="any"
+                    value={editTotalAmount || ''}
+                    onChange={(e) => setEditTotalAmount(parseFloat(e.target.value) || 0)}
+                    className="w-full px-3 py-2 text-sm bg-white border border-amber-300 rounded-lg focus:outline-none focus:border-amber-600 font-bold text-slate-900"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                    Estado
+                  </label>
+                  <select
+                    value={editStatus}
+                    onChange={(e) => setEditStatus(e.target.value as any)}
+                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-blue-500 text-slate-800"
+                  >
+                    <option value="draft">Borrador</option>
+                    <option value="sent">Enviado al Cliente</option>
+                    <option value="accepted">Aceptado</option>
+                    <option value="rejected">No Aceptado</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="p-4 bg-slate-900 text-white rounded-xl flex items-center justify-between">
+                <div>
+                  <p className="text-[11px] text-slate-400 uppercase">Costos Directos</p>
+                  <p className="text-base font-bold text-slate-200">${editTotalCosts.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                </div>
+                <div className="border-l border-slate-700 pl-4">
+                  <p className="text-[11px] text-slate-400 uppercase">Utilidad Proyectada</p>
+                  <p className={`text-base font-bold ${editNetProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    ${editNetProfit.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  </p>
+                </div>
+                <div className="border-l border-slate-700 pl-4">
+                  <p className="text-[11px] text-slate-400 uppercase">Margen</p>
+                  <p className="text-base font-bold text-blue-400">{editMarginPercentage}%</p>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-4 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setEditingQuote(null)}
+                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 text-sm font-medium bg-amber-600 hover:bg-amber-700 text-white rounded-lg shadow-sm transition-colors"
+                >
+                  Guardar Cambios
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal / Vista Previa e Impresión en PDF */}
+      {selectedQuoteForPdf && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 print:p-0 print:static print:bg-white">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl overflow-hidden border border-slate-200 max-h-[92vh] flex flex-col print:border-none print:shadow-none print:max-h-none print:w-full">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50 print:hidden shrink-0">
+              <div className="flex items-center gap-2">
+                <FileText className="w-5 h-5 text-blue-600" />
+                <span className="font-bold text-slate-800 text-sm">Vista Previa de Cotización Formal</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handlePrint}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors"
+                >
+                  <Printer className="w-4 h-4" />
+                  Imprimir / Descargar PDF
+                </button>
+                <button
+                  onClick={() => setSelectedQuoteForPdf(null)}
+                  className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-8 sm:p-12 overflow-y-auto space-y-8 print:p-0 print:overflow-visible">
+              <div className="flex justify-between items-start border-b border-slate-200 pb-6">
+                <div>
+                  <h1 className="text-2xl font-black text-slate-900 tracking-tight">INSTA CRM CONTRACTORS</h1>
+                  <p className="text-xs text-slate-500 mt-1">Servicios de Construcción, Remodelación y Mantenimiento</p>
+                  <p className="text-xs text-slate-400">Miami-Dade • Broward • Palm Beach</p>
+                </div>
+                <div className="text-right">
+                  <span className="text-xs uppercase font-bold tracking-wider text-blue-600 bg-blue-50 px-3 py-1 rounded-full border border-blue-100">
+                    Presupuesto #{selectedQuoteForPdf.id.slice(0, 8).toUpperCase()}
+                  </span>
+                  <p className="text-xs text-slate-400 mt-2">
+                    Fecha: {new Date(selectedQuoteForPdf.created_at).toLocaleDateString('es-ES', { year: 'numeric', month: 'long', day: 'numeric' })}
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-6 bg-slate-50 p-5 rounded-xl border border-slate-100 text-xs">
+                <div>
+                  <p className="text-[11px] font-bold text-slate-400 uppercase mb-1">Preparado para:</p>
+                  <p className="text-sm font-bold text-slate-800">{selectedQuoteForPdf.leads?.client_name}</p>
+                  <p className="text-slate-600 mt-0.5">{selectedQuoteForPdf.leads?.phone}</p>
+                  <p className="text-slate-600">{selectedQuoteForPdf.leads?.email || 'Correo no especificado'}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] font-bold text-slate-400 uppercase mb-1">Ubicación del Proyecto:</p>
+                  <p className="font-semibold text-slate-800 capitalize">{selectedQuoteForPdf.leads?.location_county} (Zip: {selectedQuoteForPdf.leads?.zip_code})</p>
+                  <p className="text-slate-600 mt-0.5">{selectedQuoteForPdf.leads?.address || 'Dirección registrada en inspección'}</p>
+                  <p className="text-blue-600 font-medium mt-1">Servicio: {selectedQuoteForPdf.leads?.service_type}</p>
+                </div>
+              </div>
+
+              <div>
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b-2 border-slate-900 text-xs font-bold text-slate-800 uppercase">
+                      <th className="py-3">Descripción del Trabajo</th>
+                      <th className="py-3 text-right">Monto Estimado</th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-xs divide-y divide-slate-200">
+                    <tr>
+                      <td className="py-4 pr-4">
+                        <div className="font-bold text-slate-800 text-sm">{selectedQuoteForPdf.leads?.service_type}</div>
+                        <p className="text-slate-500 mt-1">
+                          Suministro de materiales de alta calidad, mano de obra calificada, transporte y ejecución técnica según inspección en sitio.
+                        </p>
+                      </td>
+                      <td className="py-4 text-right font-bold text-slate-800 text-sm align-top">
+                        ${Number(selectedQuoteForPdf.total_amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="border-t-2 border-slate-900 pt-4 flex justify-between items-center">
+                <span className="text-sm font-bold text-slate-800 uppercase tracking-wider">Total de la Propuesta</span>
+                <span className="text-2xl font-black text-slate-900">
+                  ${Number(selectedQuoteForPdf.total_amount).toLocaleString('en-US', { minimumFractionDigits: 2 })} USD
+                </span>
+              </div>
+
+              <div className="pt-6 border-t border-slate-100 text-[11px] text-slate-400 space-y-2">
+                <p><strong>Condiciones Comerciales:</strong> Presupuesto válido por 15 días calendario a partir de su emisión. Incluye garantía de mano de obra según estándares de contratación.</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-12 pt-8">
+                <div className="border-t border-slate-300 pt-2 text-center text-xs text-slate-600">
+                  <p className="font-semibold">Firma del Contratista / Asesor</p>
+                </div>
+                <div className="border-t border-slate-300 pt-2 text-center text-xs text-slate-600">
+                  <p className="font-semibold">Firma de Aceptación del Cliente</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Confirmación de Eliminación */}
+      <ConfirmModal
+        isOpen={Boolean(quoteToDelete)}
+        title="¿Eliminar este presupuesto?"
+        message={`Estás a punto de eliminar la cotización por $${Number(quoteToDelete?.total_amount || 0).toLocaleString('en-US')} para "${quoteToDelete?.leads?.client_name || 'el cliente'}". Esta acción no se puede revertir.`}
+        confirmText="Sí, eliminar cotización"
+        cancelText="No, conservar"
+        isLoading={isDeleting}
+        onConfirm={handleConfirmDeleteQuote}
+        onCancel={() => setQuoteToDelete(null)}
+      />
     </div>
   );
 }
