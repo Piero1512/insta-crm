@@ -11,7 +11,19 @@ export type LeadStatus =
   | 'cerrado_ganado'
   | 'cerrado_perdido';
 
-export type UserRole = 'admin' | 'supervisor' | 'coordinator' | 'billing';
+export type LeadTemperature = 'frio' | 'tibio' | 'caliente';
+
+export type LeadSource = 'google_ads' | 'meta_ads' | 'landing_page' | 'referido' | 'directo' | 'organico';
+
+export interface MarketingActivity {
+  id: string;
+  lead_id: string;
+  event_type: string;
+  description: string;
+  points_awarded: number;
+  metadata?: Record<string, any>;
+  created_at: string;
+}
 
 export interface Lead {
   id: string;
@@ -26,6 +38,13 @@ export interface Lead {
   status: LeadStatus;
   calls_count: number;
   messages_count: number;
+  // Campos de Marketing Intelligence
+  lead_source?: LeadSource;
+  utm_source?: string;
+  utm_campaign?: string;
+  lead_score: number;
+  temperature: LeadTemperature;
+  budget_range?: string;
   created_at: string;
 }
 
