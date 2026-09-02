@@ -2,6 +2,7 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { calculateScore } from '@/lib/scoring';
+import { sendLeadConfirmationEmails } from '@/lib/email';
 import { County, LeadSource } from '@/types/crm';
 
 export async function POST(request: Request) {
@@ -22,7 +23,6 @@ export async function POST(request: Request) {
       utm_campaign,
     } = body;
 
-    // Validación básica
     if (!client_name || !phone) {
       return NextResponse.json(
         { error: 'client_name y phone son obligatorios' },
@@ -30,13 +30,11 @@ export async function POST(request: Request) {
       );
     }
 
-    // Normalizar condado admitido
     let validCounty: County = 'miami-dade';
     const cLower = String(location_county).toLowerCase();
     if (cLower.includes('broward')) validCounty = 'broward';
     else if (cLower.includes('palm')) validCounty = 'palm beach';
 
-    // 1. Calcular Lead Score y Temperatura de entrada
     const { score, temperature } = calculateScore({
       service_type,
       location_county: validCounty,
@@ -45,7 +43,6 @@ export async function POST(request: Request) {
       messages_count: 0,
     });
 
-    // 2. Insertar Lead en Supabase
     const { data: leadData, error: leadError } = await supabase
       .from('leads')
       .insert([
@@ -75,28 +72,38 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: leadError.message }, { status: 500 });
     }
 
-    // 3. Registrar evento en Timeline de Marketing si la tabla existe
+    // Registrar actividad inicial
     await supabase.from('marketing_activities').insert([
       {
         lead_id: leadData.id,
         event_type: 'formulario_enviado',
-        description: `Lead captado automáticamente vía ${lead_source}`,
+        description: `Lead captado vía ${lead_source}`,
         points_awarded: score,
         metadata: { utm_source, utm_campaign, budget_range },
       },
     ]);
 
+    // Disparar emails en segundo plano
+    sendLeadConfirmationEmails({
+      clientName: client_name,
+      clientEmail: email,
+      phone,
+      serviceType: service_type,
+      locationCounty: validCounty,
+      budgetRange: budget_range,
+    });
+
     return NextResponse.json(
       {
         success: true,
-        message: 'Lead captado y calificado exitosamente',
+        message: 'Lead procesado correctamente',
         lead: leadData,
       },
       { status: 201 }
     );
   } catch (err: any) {
     return NextResponse.json(
-      { error: 'Payload JSON inválido o error de servidor', details: err.message },
+      { error: 'Error procesando solicitud', details: err.message },
       { status: 500 }
     );
   }

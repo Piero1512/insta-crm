@@ -5,7 +5,7 @@ import { useState, useEffect, useMemo } from 'react';
 import AppLayout from '@/components/AppLayout';
 import ConfirmModal from '@/components/ConfirmModal';
 import { supabase } from '@/lib/supabase';
-import { Lead, County, LeadSource, LeadTemperature } from '@/types/crm';
+import { Lead, County, LeadSource, LeadTemperature, LeadStatus } from '@/types/crm';
 import { calculateScore } from '@/lib/scoring';
 import { playNotificationSound } from '@/lib/audio';
 import { 
@@ -27,6 +27,11 @@ import {
   AlertCircle,
   BellRing,
   Send,
+  LayoutList,
+  KanbanSquare,
+  Users,
+  CheckCheck,
+  TrendingUp,
   X
 } from 'lucide-react';
 
@@ -36,27 +41,38 @@ interface CoordinatorOption {
   role: string;
 }
 
+const KANBAN_STAGES: { id: LeadStatus; label: string; color: string; border: string }[] = [
+  { id: 'nuevo', label: 'Nuevos Leads', color: 'bg-blue-50 text-blue-700', border: 'border-blue-200' },
+  { id: 'en_seguimiento', label: 'Protocolo 4+4', color: 'bg-amber-50 text-amber-700', border: 'border-amber-200' },
+  { id: 'visita_realizada', label: 'Visita / Terreno', color: 'bg-purple-50 text-purple-700', border: 'border-purple-200' },
+  { id: 'presupuestado', label: 'Presupuestados', color: 'bg-indigo-50 text-indigo-700', border: 'border-indigo-200' },
+  { id: 'cerrado_ganado', label: 'Ganados (Obras)', color: 'bg-emerald-50 text-emerald-700', border: 'border-emerald-200' },
+];
+
 export default function LeadsPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [coordinators, setCoordinators] = useState<CoordinatorOption[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Modo de visualización: Tabla o Embudo Kanban
+  const [viewMode, setViewMode] = useState<'table' | 'kanban'>('table');
   
-  // Banner flotante para notificación Realtime
+  // Alerta Realtime
   const [newLeadBanner, setNewLeadBanner] = useState<string | null>(null);
 
-  // Modales generales
+  // Modales
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
   const [leadToDelete, setLeadToDelete] = useState<Lead | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // Modal WhatsApp Personalizable
+  // Modal WhatsApp
   const [whatsAppLead, setWhatsAppLead] = useState<Lead | null>(null);
   const [waCountryPrefix, setWaCountryPrefix] = useState('+1');
   const [waCustomPhone, setWaCustomPhone] = useState('');
   const [waMessageBody, setWaMessageBody] = useState('');
 
-  // Modal Visita Técnica Rápida
+  // Modal Visita Express
   const [quickVisitLead, setQuickVisitLead] = useState<Lead | null>(null);
   const [quickNotes, setQuickNotes] = useState('');
   const [quickLat, setQuickLat] = useState<number | null>(null);
@@ -73,7 +89,7 @@ export default function LeadsPage() {
   const [filterCoordinator, setFilterCoordinator] = useState<string>('all');
   const [filterSource, setFilterSource] = useState<string>('all');
 
-  // Formulario Crear Lead
+  // Formulario Crear
   const [clientName, setClientName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
@@ -85,7 +101,7 @@ export default function LeadsPage() {
   const [leadSource, setLeadSource] = useState<LeadSource>('meta_ads');
   const [budgetRange, setBudgetRange] = useState<string>('5k-15k');
 
-  // Formulario Editar Lead
+  // Formulario Editar
   const [editClientName, setEditClientName] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editEmail, setEditEmail] = useState('');
@@ -111,9 +127,8 @@ export default function LeadsPage() {
   useEffect(() => {
     fetchData();
 
-    // Suscripción Realtime para avisar de prospectos entrantes
     const channel = supabase
-      .channel('public:leads')
+      .channel('public:leads_realtime')
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'leads' },
@@ -121,7 +136,7 @@ export default function LeadsPage() {
           const newRecord = payload.new as Lead;
           setLeads((prev) => [newRecord, ...prev]);
           playNotificationSound();
-          setNewLeadBanner(`¡Nuevo Lead Recibido! ${newRecord.client_name} - ${newRecord.service_type}`);
+          setNewLeadBanner(`¡Nuevo Lead Recibido! ${newRecord.client_name} (${newRecord.service_type})`);
           setTimeout(() => setNewLeadBanner(null), 8000);
         }
       )
@@ -132,12 +147,19 @@ export default function LeadsPage() {
     };
   }, []);
 
-  // --- LÓGICA DE WHATSAPP DINÁMICO ---
+  // --- KPIs CALCULADOS PARA LAS TARJETAS SUPERIORES ---
+  const kpis = useMemo(() => {
+    const total = leads.length;
+    const hotCount = leads.filter((l) => l.temperature === 'caliente' || (l.lead_score || 0) >= 70).length;
+    const protocolDone = leads.filter((l) => l.calls_count >= 4 && l.messages_count >= 4).length;
+    const visitsDone = leads.filter((l) => l.status === 'visita_realizada' || l.status === 'presupuestado' || l.status === 'cerrado_ganado').length;
+    return { total, hotCount, protocolDone, visitsDone };
+  }, [leads]);
+
+  // WhatsApp
   const handleOpenWhatsAppModal = (lead: Lead) => {
     setWhatsAppLead(lead);
-
     const raw = lead.phone.trim();
-    // Detección automática de prefijo si ya viene escrito
     if (raw.startsWith('+57')) {
       setWaCountryPrefix('+57');
       setWaCustomPhone(raw.replace('+57', '').trim());
@@ -151,46 +173,36 @@ export default function LeadsPage() {
       setWaCountryPrefix('+1');
       setWaCustomPhone(raw.replace('+1', '').trim());
     } else {
-      setWaCountryPrefix('+1'); // Predeterminado USA/Florida
+      setWaCountryPrefix('+1');
       setWaCustomPhone(raw);
     }
 
     setWaMessageBody(
-      `Hola ${lead.client_name}, le saludamos de Insta CRM Florida Contractors. Recibimos su solicitud para ${lead.service_type}. ¿A qué hora le resultaría conveniente coordinar una breve llamada o inspección técnica a su propiedad?`
+      `Hola ${lead.client_name}, le saludamos de Insta CRM Florida Contractors. Recibimos su solicitud para ${lead.service_type}. ¿A qué hora le resultaría conveniente que coordinemos una breve llamada o visita técnica a su propiedad?`
     );
   };
 
   const handleSendWhatsApp = async () => {
     if (!whatsAppLead) return;
-
-    // Limpiar dígitos del teléfono y prefijo
     const cleanNumber = waCustomPhone.replace(/\D/g, '');
     const cleanPrefix = waCountryPrefix.replace(/\D/g, '');
-    
-    // Si no seleccionó prefijo o el número ya lo tenía, enviar directo
     const fullPhoneNumber = cleanPrefix ? `${cleanPrefix}${cleanNumber}` : cleanNumber;
 
-    const targetUrl = `https://wa.me/${fullPhoneNumber}?text=${encodeURIComponent(waMessageBody)}`;
-    window.open(targetUrl, '_blank');
+    window.open(`https://wa.me/${fullPhoneNumber}?text=${encodeURIComponent(waMessageBody)}`, '_blank');
 
-    // Registrar interacción en el protocolo 4+4 si no ha alcanzado 4
     if (whatsAppLead.messages_count < 4) {
       await handleIncrementInteraction(whatsAppLead, 'message');
     }
-
     setWhatsAppLead(null);
   };
 
-  // --- LÓGICA DE INTERACCIONES Y PUNTUACIÓN ---
+  // Interacciones 4+4
   const handleIncrementInteraction = async (lead: Lead, type: 'call' | 'message') => {
-    const currentCalls = lead.calls_count;
-    const currentMessages = lead.messages_count;
+    const newCalls = type === 'call' ? lead.calls_count + 1 : lead.calls_count;
+    const newMessages = type === 'message' ? lead.messages_count + 1 : lead.messages_count;
 
-    const newCalls = type === 'call' ? currentCalls + 1 : currentCalls;
-    const newMessages = type === 'message' ? currentMessages + 1 : currentMessages;
-
-    if (type === 'call' && currentCalls >= 4) return;
-    if (type === 'message' && currentMessages >= 4) return;
+    if (type === 'call' && lead.calls_count >= 4) return;
+    if (type === 'message' && lead.messages_count >= 4) return;
 
     const { score, temperature } = calculateScore({
       service_type: lead.service_type,
@@ -203,20 +215,26 @@ export default function LeadsPage() {
     const updateData = {
       calls_count: newCalls,
       messages_count: newMessages,
-      status: 'en_seguimiento',
+      status: (lead.status === 'nuevo' ? 'en_seguimiento' : lead.status) as LeadStatus,
       lead_score: score,
       temperature: temperature,
     };
 
     const { error } = await supabase.from('leads').update(updateData).eq('id', lead.id);
     if (!error) {
-      setLeads((prev) =>
-        prev.map((l) => (l.id === lead.id ? { ...l, ...updateData, status: 'en_seguimiento' } : l))
-      );
+      setLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, ...updateData } : l)));
     }
   };
 
-  // --- LÓGICA DE VISITA TÉCNICA RÁPIDA ---
+  // Mover etapa en Kanban
+  const handleMoveStage = async (leadId: string, newStatus: LeadStatus) => {
+    const { error } = await supabase.from('leads').update({ status: newStatus }).eq('id', leadId);
+    if (!error) {
+      setLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, status: newStatus } : l)));
+    }
+  };
+
+  // Visita Express
   const handleOpenQuickVisit = (lead: Lead) => {
     setQuickVisitLead(lead);
     setQuickNotes('');
@@ -230,13 +248,11 @@ export default function LeadsPage() {
   const handleGetQuickLocation = () => {
     setGettingLocation(true);
     setQuickGpsError('');
-
     if (!navigator.geolocation) {
-      setQuickGpsError('Geolocalización no soportada en este navegador');
+      setQuickGpsError('Geolocalización no disponible');
       setGettingLocation(false);
       return;
     }
-
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         setQuickLat(pos.coords.latitude);
@@ -244,7 +260,7 @@ export default function LeadsPage() {
         setGettingLocation(false);
       },
       (err) => {
-        setQuickGpsError('Error al fijar GPS: ' + err.message);
+        setQuickGpsError('Error GPS: ' + err.message);
         setGettingLocation(false);
       },
       { enableHighAccuracy: true, timeout: 10000 }
@@ -254,13 +270,13 @@ export default function LeadsPage() {
   const handleSaveQuickVisit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!quickVisitLead || !quickLat || !quickLng) {
-      alert('La coordenada satelital GPS es obligatoria para validar la visita.');
+      alert('La coordenada GPS satelital es obligatoria.');
       return;
     }
 
     setSavingQuickVisit(true);
-
     const photoUrls: string[] = [];
+
     for (const file of quickFiles) {
       const ext = file.name.split('.').pop();
       const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${ext}`;
@@ -277,26 +293,25 @@ export default function LeadsPage() {
         lead_id: quickVisitLead.id,
         latitude: quickLat,
         longitude: quickLng,
-        evaluation_notes: quickNotes || 'Inspección técnica reportada de forma rápida desde la bandeja comercial.',
+        evaluation_notes: quickNotes || 'Inspección técnica rápida registrada desde la bandeja.',
         visited_at: new Date().toISOString(),
         photos: photoUrls,
       }
     ]);
 
     if (visitError) {
-      alert('Error al guardar visita: ' + visitError.message);
+      alert('Error al registrar visita: ' + visitError.message);
       setSavingQuickVisit(false);
       return;
     }
 
     await supabase.from('leads').update({ status: 'visita_realizada' }).eq('id', quickVisitLead.id);
-
     setSavingQuickVisit(false);
     setQuickVisitLead(null);
     fetchData();
   };
 
-  // --- CREAR Y ACTUALIZAR LEADS ---
+  // Crear Lead
   const handleCreateLead = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -329,7 +344,7 @@ export default function LeadsPage() {
     ]);
 
     if (error) {
-      alert('Error al crear lead: ' + error.message);
+      alert('Error al registrar lead: ' + error.message);
       return;
     }
 
@@ -388,7 +403,7 @@ export default function LeadsPage() {
       .eq('id', editingLead.id);
 
     if (error) {
-      alert('Error al actualizar lead: ' + error.message);
+      alert('Error al actualizar: ' + error.message);
       return;
     }
     setEditingLead(null);
@@ -401,14 +416,14 @@ export default function LeadsPage() {
     const { error } = await supabase.from('leads').delete().eq('id', leadToDelete.id);
     setIsDeleting(false);
     if (error) {
-      alert('Error al eliminar lead: ' + error.message);
+      alert('Error al eliminar: ' + error.message);
     } else {
       setLeads((prev) => prev.filter((l) => l.id !== leadToDelete.id));
       setLeadToDelete(null);
     }
   };
 
-  // Filtros de búsqueda
+  // Filtrado
   const filteredLeads = useMemo(() => {
     return leads.filter((lead) => {
       const query = searchQuery.toLowerCase().trim();
@@ -484,7 +499,7 @@ export default function LeadsPage() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        {/* Notificación Flotante Realtime */}
+        {/* Banner Realtime */}
         {newLeadBanner && (
           <div className="bg-blue-600 text-white p-3.5 rounded-xl shadow-lg flex items-center justify-between animate-bounce">
             <div className="flex items-center gap-2.5 text-xs sm:text-sm font-semibold">
@@ -497,28 +512,97 @@ export default function LeadsPage() {
           </div>
         )}
 
+        {/* Cabecera Principal */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <h2 className="text-xl sm:text-2xl font-bold text-slate-800">Leads & Prospectos</h2>
             <p className="text-xs sm:text-sm text-slate-500">
-              Captación en vivo, WhatsApp personalizado y registro de visitas satelitales en terreno
+              Calificación predictiva (Lead Scoring), atribución multicanal y protocolo 4+4
             </p>
           </div>
-          <button
-            onClick={() => setIsCreateModalOpen(true)}
-            className="w-full sm:w-auto inline-flex justify-center items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium shadow-sm transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            Nuevo Lead
-          </button>
+
+          <div className="flex items-center gap-2">
+            {/* Selector de Vistas: Tabla vs Embudo Kanban */}
+            <div className="bg-slate-200/80 p-1 rounded-xl flex items-center gap-1 border border-slate-300">
+              <button
+                onClick={() => setViewMode('table')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                  viewMode === 'table' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <LayoutList className="w-3.5 h-3.5" />
+                <span>Lista</span>
+              </button>
+              <button
+                onClick={() => setViewMode('kanban')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                  viewMode === 'kanban' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <KanbanSquare className="w-3.5 h-3.5" />
+                <span>Pipeline Kanban</span>
+              </button>
+            </div>
+
+            <button
+              onClick={() => setIsCreateModalOpen(true)}
+              className="inline-flex justify-center items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-sm transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              Nuevo Lead
+            </button>
+          </div>
+        </div>
+
+        {/* 4 RECUADROS MÉTRICOS SUPERIORES (RESTAURADOS) */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center gap-3.5">
+            <div className="p-2.5 bg-blue-50 text-blue-600 rounded-xl">
+              <Users className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-[11px] font-bold text-slate-400 uppercase">Total Leads</p>
+              <h4 className="text-xl sm:text-2xl font-bold text-slate-800">{kpis.total}</h4>
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center gap-3.5">
+            <div className="p-2.5 bg-rose-50 text-rose-600 rounded-xl">
+              <Flame className="w-5 h-5 fill-rose-500 text-rose-500" />
+            </div>
+            <div>
+              <p className="text-[11px] font-bold text-slate-400 uppercase">Leads Calientes</p>
+              <h4 className="text-xl sm:text-2xl font-bold text-slate-800">{kpis.hotCount}</h4>
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center gap-3.5">
+            <div className="p-2.5 bg-emerald-50 text-emerald-600 rounded-xl">
+              <CheckCheck className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-[11px] font-bold text-slate-400 uppercase">Protocolo 4+4 Full</p>
+              <h4 className="text-xl sm:text-2xl font-bold text-slate-800">{kpis.protocolDone}</h4>
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center gap-3.5">
+            <div className="p-2.5 bg-purple-50 text-purple-600 rounded-xl">
+              <TrendingUp className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-[11px] font-bold text-slate-400 uppercase">En Inspección/Cierre</p>
+              <h4 className="text-xl sm:text-2xl font-bold text-slate-800">{kpis.visitsDone}</h4>
+            </div>
+          </div>
         </div>
 
         {/* Barra de Filtros */}
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
+        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-slate-700 uppercase flex items-center gap-1.5">
               <Filter className="w-3.5 h-3.5 text-blue-600" />
-              Filtros & Segmentación
+              Filtros Multicriterio & Segmentación
             </span>
             {hasActiveFilters && (
               <button
@@ -602,143 +686,232 @@ export default function LeadsPage() {
           </div>
         </div>
 
-        {/* Tabla Principal */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-          <div className="p-4 sm:p-6 border-b border-slate-100 flex items-center justify-between">
-            <h3 className="font-bold text-slate-800 text-sm sm:text-base">Bandeja de Prospectos</h3>
-            <span className="text-xs font-semibold px-2.5 py-1 bg-slate-100 text-slate-600 rounded-full">
-              {filteredLeads.length} Leads
-            </span>
-          </div>
+        {/* RENDER SEGÚN MODO: TABLA O KANBAN */}
+        {viewMode === 'table' ? (
+          /* VISTA 1: TABLA */
+          <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+            <div className="p-4 sm:p-6 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="font-bold text-slate-800 text-sm sm:text-base">Bandeja Inteligente de Leads</h3>
+              <span className="text-xs font-semibold px-2.5 py-1 bg-slate-100 text-slate-600 rounded-full">
+                {filteredLeads.length} Prospectos
+              </span>
+            </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse min-w-[850px]">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                  <th className="py-3 px-4">Cliente / Contacto</th>
-                  <th className="py-3 px-4">Scoring & Origen</th>
-                  <th className="py-3 px-4">Ubicación</th>
-                  <th className="py-3 px-4">Protocolo 4+4</th>
-                  <th className="py-3 px-4">Estado</th>
-                  <th className="py-3 px-4 text-center">Inspección</th>
-                  <th className="py-3 px-4 text-right">Acciones</th>
-                </tr>
-              </thead>
-              <tbody className="text-sm divide-y divide-slate-100">
-                {loading ? (
-                  <tr>
-                    <td colSpan={7} className="py-8 text-center text-slate-400">
-                      Cargando prospectos...
-                    </td>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse min-w-[850px]">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                    <th className="py-3 px-4">Cliente / Contacto</th>
+                    <th className="py-3 px-4">Origen & Temperatura</th>
+                    <th className="py-3 px-4">Ubicación</th>
+                    <th className="py-3 px-4">Seguimiento 4+4</th>
+                    <th className="py-3 px-4">Estado</th>
+                    <th className="py-3 px-4 text-center">Visita Express</th>
+                    <th className="py-3 px-4 text-right">Acciones</th>
                   </tr>
-                ) : filteredLeads.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} className="py-8 text-center text-slate-500">
-                      No se encontraron prospectos con los filtros seleccionados.
-                    </td>
-                  </tr>
-                ) : (
-                  filteredLeads.map((lead) => (
-                    <tr key={lead.id} className="hover:bg-slate-50/80 transition-colors">
-                      <td className="py-3 px-4">
-                        <div className="font-semibold text-slate-800">{lead.client_name}</div>
-                        <div className="text-xs text-slate-500 flex items-center gap-1.5 mt-0.5">
-                          <span>{lead.service_type}</span>
-                          <span>•</span>
-                          <span className="font-medium text-slate-700">{lead.phone}</span>
-                        </div>
-                      </td>
-
-                      <td className="py-3 px-4">
-                        <div className="flex flex-col gap-1 items-start">
-                          {getTemperatureBadge(lead.temperature, lead.lead_score)}
-                          {getSourceBadge(lead.lead_source)}
-                        </div>
-                      </td>
-
-                      <td className="py-3 px-4">
-                        <div className="text-xs font-medium text-slate-700 flex items-center gap-1 capitalize">
-                          <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                          {lead.location_county} {lead.zip_code && `(${lead.zip_code})`}
-                        </div>
-                      </td>
-
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-2 text-xs">
-                          <span className={`px-2 py-0.5 rounded font-semibold ${lead.calls_count >= 4 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-600'}`}>
-                            📞 {lead.calls_count}/4
-                          </span>
-                          <span className={`px-2 py-0.5 rounded font-semibold ${lead.messages_count >= 4 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-600'}`}>
-                            💬 {lead.messages_count}/4
-                          </span>
-                        </div>
-                      </td>
-
-                      <td className="py-3 px-4">
-                        <span className="capitalize px-2.5 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-full text-xs font-semibold">
-                          {lead.status.replace('_', ' ')}
-                        </span>
-                      </td>
-
-                      <td className="py-3 px-4 text-center">
-                        <button
-                          onClick={() => handleOpenQuickVisit(lead)}
-                          title="Reportar inspección técnica GPS para este lead"
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-semibold transition-colors border border-indigo-200"
-                        >
-                          <CalendarPlus className="w-3.5 h-3.5" />
-                          <span>Visita</span>
-                        </button>
-                      </td>
-
-                      <td className="py-3 px-4 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          {/* Botón WhatsApp Personalizable */}
-                          <button
-                            onClick={() => handleOpenWhatsAppModal(lead)}
-                            title="Enviar WhatsApp personalizado"
-                            className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded transition-colors"
-                          >
-                            <MessageSquare className="w-4 h-4 fill-emerald-100" />
-                          </button>
-
-                          {/* Contador manual de llamada */}
-                          <button
-                            onClick={() => handleIncrementInteraction(lead, 'call')}
-                            disabled={lead.calls_count >= 4}
-                            title="Registrar llamada realizada"
-                            className="p-1.5 text-slate-500 hover:text-blue-600 rounded disabled:opacity-30"
-                          >
-                            <Phone className="w-4 h-4" />
-                          </button>
-
-                          <button
-                            onClick={() => handleOpenEdit(lead)}
-                            title="Editar prospecto"
-                            className="p-1.5 text-slate-500 hover:text-amber-600 rounded"
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
-
-                          <button
-                            onClick={() => setLeadToDelete(lead)}
-                            title="Eliminar lead"
-                            className="p-1.5 text-slate-500 hover:text-rose-600 rounded"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
+                </thead>
+                <tbody className="text-sm divide-y divide-slate-100">
+                  {loading ? (
+                    <tr>
+                      <td colSpan={7} className="py-8 text-center text-slate-400">
+                        Cargando prospectos...
                       </td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+                  ) : filteredLeads.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-8 text-center text-slate-500">
+                        No se encontraron prospectos con los filtros seleccionados.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredLeads.map((lead) => (
+                      <tr key={lead.id} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="py-3 px-4">
+                          <div className="font-semibold text-slate-800">{lead.client_name}</div>
+                          <div className="text-xs text-slate-500 flex items-center gap-1.5 mt-0.5">
+                            <span>{lead.service_type}</span>
+                            <span>•</span>
+                            <span className="font-medium text-slate-700">{lead.phone}</span>
+                          </div>
+                        </td>
+
+                        <td className="py-3 px-4">
+                          <div className="flex flex-col gap-1 items-start">
+                            {getTemperatureBadge(lead.temperature, lead.lead_score)}
+                            {getSourceBadge(lead.lead_source)}
+                          </div>
+                        </td>
+
+                        <td className="py-3 px-4">
+                          <div className="text-xs font-medium text-slate-700 flex items-center gap-1 capitalize">
+                            <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                            {lead.location_county} {lead.zip_code && `(${lead.zip_code})`}
+                          </div>
+                          {lead.budget_range && lead.budget_range !== 'no_especificado' && (
+                            <span className="text-[11px] text-slate-400">Presupuesto: {lead.budget_range}</span>
+                          )}
+                        </td>
+
+                        <td className="py-3 px-4">
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className={`px-2 py-0.5 rounded font-semibold ${lead.calls_count >= 4 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-600'}`}>
+                              📞 {lead.calls_count}/4
+                            </span>
+                            <span className={`px-2 py-0.5 rounded font-semibold ${lead.messages_count >= 4 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-600'}`}>
+                              💬 {lead.messages_count}/4
+                            </span>
+                          </div>
+                        </td>
+
+                        <td className="py-3 px-4">
+                          <span className="capitalize px-2.5 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-full text-xs font-semibold">
+                            {lead.status.replace('_', ' ')}
+                          </span>
+                        </td>
+
+                        <td className="py-3 px-4 text-center">
+                          <button
+                            onClick={() => handleOpenQuickVisit(lead)}
+                            title="Reportar inspección técnica GPS para este lead"
+                            className="inline-flex items-center gap-1 px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-semibold transition-colors border border-indigo-200"
+                          >
+                            <CalendarPlus className="w-3.5 h-3.5" />
+                            <span>Visita</span>
+                          </button>
+                        </td>
+
+                        <td className="py-3 px-4 text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              onClick={() => handleOpenWhatsAppModal(lead)}
+                              title="Enviar WhatsApp con prefijo personalizado"
+                              className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded transition-colors"
+                            >
+                              <MessageSquare className="w-4 h-4 fill-emerald-100" />
+                            </button>
+
+                            <button
+                              onClick={() => handleIncrementInteraction(lead, 'call')}
+                              disabled={lead.calls_count >= 4}
+                              title="Llamada realizada (+1 al protocolo)"
+                              className="p-1.5 text-slate-500 hover:text-blue-600 rounded disabled:opacity-30"
+                            >
+                              <Phone className="w-4 h-4" />
+                            </button>
+
+                            <button
+                              onClick={() => handleOpenEdit(lead)}
+                              title="Editar lead"
+                              className="p-1.5 text-slate-500 hover:text-amber-600 rounded"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+
+                            <button
+                              onClick={() => setLeadToDelete(lead)}
+                              title="Eliminar lead"
+                              className="p-1.5 text-slate-500 hover:text-rose-600 rounded"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
+        ) : (
+          /* VISTA 2: PIPELINE KANBAN INTERACTIVO ESTILO SALESFORCE */
+          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 overflow-x-auto pb-4">
+            {KANBAN_STAGES.map((stage) => {
+              const stageLeads = filteredLeads.filter((l) => l.status === stage.id);
+
+              return (
+                <div key={stage.id} className="bg-slate-100/80 rounded-2xl p-3 border border-slate-200 flex flex-col min-w-[260px]">
+                  {/* Cabecera de Etapa */}
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-200/80 mb-3">
+                    <span className={`text-xs font-bold px-2.5 py-1 rounded-lg border ${stage.color} ${stage.border}`}>
+                      {stage.label}
+                    </span>
+                    <span className="text-xs font-bold text-slate-500 bg-white px-2 py-0.5 rounded-full shadow-xs">
+                      {stageLeads.length}
+                    </span>
+                  </div>
+
+                  {/* Tarjetas de Prospectos en la Etapa */}
+                  <div className="space-y-3 flex-1 overflow-y-auto max-h-[600px] pr-1">
+                    {stageLeads.length === 0 ? (
+                      <div className="text-center py-6 text-xs text-slate-400 border-2 border-dashed border-slate-200 rounded-xl">
+                        Sin leads en esta fase
+                      </div>
+                    ) : (
+                      stageLeads.map((lead) => (
+                        <div
+                          key={lead.id}
+                          className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs hover:shadow-md transition-shadow space-y-2.5"
+                        >
+                          <div className="flex items-start justify-between gap-1">
+                            <div>
+                              <h4 className="font-bold text-slate-800 text-xs sm:text-sm">{lead.client_name}</h4>
+                              <p className="text-[11px] text-slate-500 font-medium">{lead.service_type}</p>
+                            </div>
+                            {getTemperatureBadge(lead.temperature, lead.lead_score)}
+                          </div>
+
+                          <div className="text-[11px] text-slate-600 flex items-center justify-between pt-1 border-t border-slate-100">
+                            <span className="flex items-center gap-1 capitalize">
+                              <MapPin className="w-3 h-3 text-slate-400" />
+                              {lead.location_county}
+                            </span>
+                            <span className="font-semibold text-slate-700">{lead.phone}</span>
+                          </div>
+
+                          {/* Protocolo 4+4 compacto */}
+                          <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-100">
+                            <span className="text-slate-400 font-medium">4+4:</span>
+                            <div className="flex gap-1.5 font-bold">
+                              <span className={lead.calls_count >= 4 ? 'text-emerald-600' : 'text-slate-600'}>📞 {lead.calls_count}/4</span>
+                              <span className={lead.messages_count >= 4 ? 'text-emerald-600' : 'text-slate-600'}>💬 {lead.messages_count}/4</span>
+                            </div>
+                          </div>
+
+                          {/* Selector rápido para mover de etapa */}
+                          <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                            <button
+                              onClick={() => handleOpenWhatsAppModal(lead)}
+                              className="p-1.5 text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors"
+                              title="Enviar WhatsApp"
+                            >
+                              <MessageSquare className="w-3.5 h-3.5 fill-emerald-100" />
+                            </button>
+                            <select
+                              value={lead.status}
+                              onChange={(e) => handleMoveStage(lead.id, e.target.value as LeadStatus)}
+                              className="text-[10px] bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 font-bold text-slate-700 focus:outline-none flex-1"
+                            >
+                              <option value="nuevo">Mover a: Nuevo</option>
+                              <option value="en_seguimiento">Mover a: Seguimiento</option>
+                              <option value="visita_realizada">Mover a: Visita</option>
+                              <option value="presupuestado">Mover a: Presupuesto</option>
+                              <option value="cerrado_ganado">Mover a: Ganado</option>
+                              <option value="cerrado_perdido">Mover a: Perdido</option>
+                            </select>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
-      {/* MODAL WHATSAPP: CONFIGURACIÓN DE PREFIJO Y MENSAJE */}
+      {/* MODAL WHATSAPP DINÁMICO */}
       {whatsAppLead && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200">
@@ -776,13 +949,10 @@ export default function LeadsPage() {
                     type="text"
                     value={waCustomPhone}
                     onChange={(e) => setWaCustomPhone(e.target.value)}
-                    placeholder="Número de teléfono"
+                    placeholder="Número telefónico"
                     className="sm:col-span-2 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-semibold focus:outline-none focus:border-emerald-500"
                   />
                 </div>
-                <p className="text-[11px] text-slate-400 mt-1">
-                  Puedes modificar el código de país o editar el número si el cliente lo proporcionó diferente.
-                </p>
               </div>
 
               <div>
@@ -819,7 +989,7 @@ export default function LeadsPage() {
         </div>
       )}
 
-      {/* MODAL VISITA EXPRESS (GPS + CÁMARA) */}
+      {/* MODAL VISITA EXPRESS (GPS) */}
       {quickVisitLead && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-200">
@@ -827,7 +997,7 @@ export default function LeadsPage() {
               <div>
                 <h3 className="font-bold text-slate-800 text-sm sm:text-base flex items-center gap-2">
                   <CalendarPlus className="w-4 h-4 text-indigo-600" />
-                  Inspección Técnica en Sitio
+                  Inspección Técnica en Terreno
                 </h3>
                 <p className="text-xs text-slate-500">
                   {quickVisitLead.client_name} • {quickVisitLead.service_type}
@@ -884,7 +1054,7 @@ export default function LeadsPage() {
                   <label htmlFor="quick-visit-photos" className="cursor-pointer flex flex-col items-center gap-1">
                     <Camera className="w-5 h-5 text-slate-400" />
                     <span className="text-xs font-semibold text-blue-600 hover:underline">
-                      Tomar foto con cámara o adjuntar archivos
+                      Tomar foto con cámara o adjuntar
                     </span>
                     <span className="text-[11px] text-slate-400">
                       {quickFiles.length > 0 ? `${quickFiles.length} foto(s) seleccionada(s)` : 'Opcional'}
