@@ -10,13 +10,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Teléfono y mensaje son obligatorios' }, { status: 400 });
     }
 
-    // 1. Limpieza estricta de caracteres
     const rawDigits = phone.replace(/\D/g, '');
     const prefix = (countryCode || '57').replace(/\D/g, '');
 
     let cleanPhone = rawDigits;
-
-    // Si el usuario no incluyó el código de país en el número, se lo anteponemos
     if (!rawDigits.startsWith(prefix)) {
       cleanPhone = `${prefix}${rawDigits}`;
     }
@@ -31,7 +28,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // 2. Intentar envío de texto regular
     let payloadBody: Record<string, unknown> = {
       messaging_product: 'whatsapp',
       to: cleanPhone,
@@ -53,7 +49,7 @@ export async function POST(req: Request) {
 
     let metaData = await metaResponse.json();
 
-    // 3. Fallback a plantilla oficial si la ventana de 24 horas está cerrada o requiere template
+    // Fallback a plantilla si la ventana de 24h está cerrada
     if (!metaResponse.ok && (metaData.error?.code === 131047 || metaData.error?.code === 131005)) {
       payloadBody = {
         messaging_product: 'whatsapp',
@@ -81,23 +77,21 @@ export async function POST(req: Request) {
     }
 
     if (!metaResponse.ok) {
-      console.error('Error Meta API detallado:', metaData);
       const detail = metaData.error?.message || 'Error al procesar con Meta';
       const code = metaData.error?.code ? `(#${metaData.error.code}) ` : '';
       return NextResponse.json(
-        { error: `${code}${detail}. Verifica que el número +${cleanPhone} esté registrado en el panel de pruebas de Meta.` },
+        { error: `${code}${detail}` },
         { status: metaResponse.status }
       );
     }
 
-    const messageId = metaData.messages?.[0]?.id || null;
-
-    // 4. Registrar en base de datos
+    // Guardar en la tabla con las columnas correctas: 'note' y 'author_name'
     if (leadId) {
       await supabase.from('lead_notes').insert([
         {
           lead_id: leadId,
-          content: `[WhatsApp Oficial Enviado a +${cleanPhone}]: "${messageText}" (Enviado por: ${coordinatorName || 'Coordinador'}) [ID: ${messageId}]`,
+          author_name: coordinatorName || 'Coordinador',
+          note: `💬 [WhatsApp Oficial Enviado a +${cleanPhone}]: "${messageText}"`,
         },
       ]);
 
@@ -108,12 +102,10 @@ export async function POST(req: Request) {
         .single();
 
       const currentCount = lead?.whatsapp_count ?? 0;
-      const newCount = currentCount + 1;
-
       await supabase
         .from('leads')
         .update({
-          whatsapp_count: newCount,
+          whatsapp_count: currentCount + 1,
           last_contact: new Date().toISOString(),
         })
         .eq('id', leadId);

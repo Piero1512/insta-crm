@@ -2,7 +2,6 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 
-// 1. Verificación inicial requerida por Meta (Handshake GET)
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const mode = searchParams.get('hub.mode');
@@ -18,7 +17,6 @@ export async function GET(req: Request) {
   return new Response('Token de verificación inválido', { status: 403 });
 }
 
-// 2. Recepción automática de mensajes entrantes de clientes (POST)
 export async function POST(req: Request) {
   try {
     const body = await req.json();
@@ -29,10 +27,10 @@ export async function POST(req: Request) {
     const message = value?.messages?.[0];
 
     if (message && message.type === 'text') {
-      const fromPhone = message.from; // Número remitente del cliente
+      const fromPhone = message.from; // Número completo (ej: 573043456661)
       const textBody = message.text.body;
 
-      // Buscar si el cliente existe en el CRM por coincidencia de los últimos 8 dígitos
+      // Buscar el lead por los últimos 8 dígitos
       const shortPhone = fromPhone.slice(-8);
 
       const { data: matchedLead } = await supabase
@@ -42,15 +40,16 @@ export async function POST(req: Request) {
         .maybeSingle();
 
       if (matchedLead) {
-        // Registrar respuesta en la bitácora del lead
+        // Insertar en lead_notes con columnas 'note' y 'author_name'
         await supabase.from('lead_notes').insert([
           {
             lead_id: matchedLead.id,
-            content: `[WhatsApp Entrante de ${matchedLead.client_name}]: "${textBody}"`,
+            author_name: matchedLead.client_name || 'Cliente WhatsApp',
+            note: `📥 [WhatsApp Entrante de ${matchedLead.client_name}]: "${textBody}"`,
           },
         ]);
 
-        // Notificar al coordinador asignado mediante mensaje interno
+        // Si tiene coordinador asignado, notificar a internal_messages
         if (matchedLead.assigned_to) {
           await supabase.from('internal_messages').insert([
             {

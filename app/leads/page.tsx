@@ -14,12 +14,13 @@ import {
   Filter, 
   Flame, 
   MapPin, 
-  Send,
-  X,
-  CheckCircle2,
-  AlertCircle,
-  FileText,
-  Clock
+  Send, 
+  X, 
+  CheckCircle2, 
+  AlertCircle, 
+  FileText, 
+  Clock,
+  User
 } from 'lucide-react';
 
 interface Lead {
@@ -42,10 +43,12 @@ interface Lead {
   created_at: string;
 }
 
+// Interfaz corregida con las columnas reales de Supabase ('note' y 'author_name')
 interface LeadNote {
   id: string;
   lead_id: string;
-  content: string;
+  author_name: string;
+  note: string;
   created_at: string;
 }
 
@@ -77,12 +80,12 @@ export default function LeadsPage() {
   const [sendingWhatsApp, setSendingWhatsApp] = useState(false);
   const [waStatusFeedback, setWaStatusFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Modal Bitácora / Respuestas de WhatsApp
+  // Modal Historial / Bitácora
   const [activeNotesLead, setActiveNotesLead] = useState<Lead | null>(null);
   const [leadNotes, setLeadNotes] = useState<LeadNote[]>([]);
   const [loadingNotes, setLoadingNotes] = useState(false);
 
-  // Cargar datos
+  // Cargar datos iniciales
   const loadInitialData = async () => {
     setLoading(true);
 
@@ -119,7 +122,7 @@ export default function LeadsPage() {
     loadInitialData();
   }, []);
 
-  // Cargar historial/notas de un lead específico
+  // Cargar bitácora de un lead
   const openLeadHistory = async (lead: Lead) => {
     setActiveNotesLead(lead);
     setLoadingNotes(true);
@@ -131,14 +134,14 @@ export default function LeadsPage() {
       .order('created_at', { ascending: false });
 
     if (!error && data) {
-      setLeadNotes(data);
+      setLeadNotes(data as LeadNote[]);
     } else {
       setLeadNotes([]);
     }
     setLoadingNotes(false);
   };
 
-  // Suscripción Realtime para notas nuevas (cuando Meta Webhook reciba respuesta)
+  // Suscripción Realtime para notas nuevas (cuando Meta Webhook recibe respuesta)
   useEffect(() => {
     if (!activeNotesLead) return;
 
@@ -163,7 +166,7 @@ export default function LeadsPage() {
     };
   }, [activeNotesLead]);
 
-  // Abrir modal de WhatsApp
+  // Preparar modal de WhatsApp
   const openWhatsAppModal = (lead: Lead) => {
     setActiveWhatsAppLead(lead);
     setWaStatusFeedback(null);
@@ -189,7 +192,7 @@ export default function LeadsPage() {
     );
   };
 
-  // Enviar WhatsApp oficial
+  // Enviar mensaje oficial por Meta API
   const handleSendOfficialWhatsApp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeWhatsAppLead || !customMessage.trim() || !targetPhone.trim()) return;
@@ -219,6 +222,7 @@ export default function LeadsPage() {
           text: `Mensaje transmitido exitosamente a +${data.targetPhone}. La bitácora fue actualizada.`,
         });
 
+        // Actualizar contador en la tabla local
         setLeads((prev) =>
           prev.map((l) =>
             l.id === activeWhatsAppLead.id
@@ -246,7 +250,7 @@ export default function LeadsPage() {
     }
   };
 
-  // Filtros
+  // Filtrado de leads
   const filteredLeads = useMemo(() => {
     return leads.filter((lead) => {
       const matchSearch =
@@ -284,7 +288,7 @@ export default function LeadsPage() {
           </button>
         </div>
 
-        {/* Barra de Filtros */}
+        {/* Filtros */}
         <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs space-y-3">
           <div className="flex items-center gap-2 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
             <Filter className="w-3.5 h-3.5" />
@@ -448,25 +452,25 @@ export default function LeadsPage() {
 
                       <td className="py-3 px-4 text-right">
                         <div className="flex items-center justify-end gap-1">
-                          {/* Ver Historial / Bitácora de Respuestas */}
+                          {/* BOTÓN 1: Historial y respuestas del cliente */}
                           <button
                             onClick={() => openLeadHistory(lead)}
                             className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
-                            title="Ver Historial & Respuestas"
+                            title="Ver Bitácora & Respuestas de WhatsApp"
                           >
                             <FileText className="w-4 h-4" />
                           </button>
 
-                          {/* Llamada directa */}
+                          {/* BOTÓN 2: Llamada rápida */}
                           <a
                             href={`tel:${lead.phone}`}
                             className="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                            title="Llamar"
+                            title="Llamar teléfono"
                           >
                             <Phone className="w-4 h-4" />
                           </a>
 
-                          {/* Enviar WhatsApp Oficial */}
+                          {/* BOTÓN 3: Enviar WhatsApp Oficial Meta */}
                           <button
                             onClick={() => openWhatsAppModal(lead)}
                             className="p-1.5 text-slate-400 hover:text-sky-600 hover:bg-sky-50 rounded-lg transition-colors"
@@ -492,7 +496,7 @@ export default function LeadsPage() {
         </div>
       </div>
 
-      {/* MODAL DE HISTORIAL & CONVERSACIÓN DE WHATSAPP */}
+      {/* MODAL DE HISTORIAL & RESPUESTAS ENTRANTES */}
       {activeNotesLead && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
           <div className="bg-white rounded-2xl max-w-xl w-full p-5 shadow-2xl border border-slate-200 flex flex-col max-h-[85vh]">
@@ -518,40 +522,42 @@ export default function LeadsPage() {
 
             <div className="flex-1 overflow-y-auto py-4 space-y-3">
               {loadingNotes ? (
-                <div className="text-center py-10 text-xs text-slate-400">Cargando registros...</div>
+                <div className="text-center py-10 text-xs text-slate-400">Cargando bitácora...</div>
               ) : leadNotes.length === 0 ? (
                 <div className="text-center py-12 text-slate-400 text-xs space-y-1">
-                  <p className="font-semibold text-slate-600">Sin interacciones registradas</p>
-                  <p>Envía un mensaje o espera la respuesta del cliente.</p>
+                  <p className="font-semibold text-slate-600">Sin notas o interacciones registradas</p>
+                  <p>Envía un WhatsApp oficial o espera la respuesta del cliente.</p>
                 </div>
               ) : (
-                leadNotes.map((note) => {
-                  const isIncoming = note.content.includes('[WhatsApp Entrante');
-                  const isOutgoing = note.content.includes('[WhatsApp Oficial Enviado');
+                leadNotes.map((item) => {
+                  const text = item.note || '';
+                  const isIncoming = text.includes('[WhatsApp Entrante');
+                  const isOutgoing = text.includes('[WhatsApp Oficial Enviado') || text.includes('[WhatsApp: Mensaje');
 
                   return (
                     <div
-                      key={note.id}
+                      key={item.id}
                       className={`p-3.5 rounded-xl border text-xs leading-relaxed ${
                         isIncoming
-                          ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950 ml-4'
+                          ? 'bg-emerald-50/80 border-emerald-200 text-emerald-950 ml-4'
                           : isOutgoing
-                          ? 'bg-sky-50/70 border-sky-200 text-sky-950 mr-4'
+                          ? 'bg-sky-50/80 border-sky-200 text-sky-950 mr-4'
                           : 'bg-slate-50 border-slate-200 text-slate-700'
                       }`}
                     >
-                      <div className="flex items-center justify-between gap-2 mb-1">
-                        <span className={`text-[10px] font-bold uppercase tracking-wider ${
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <span className={`text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 ${
                           isIncoming ? 'text-emerald-700' : isOutgoing ? 'text-sky-700' : 'text-slate-500'
                         }`}>
-                          {isIncoming ? '📥 Respuesta de Cliente' : isOutgoing ? '📤 Mensaje Oficial Enviado' : 'Nota General'}
+                          <User className="w-3 h-3" />
+                          {item.author_name || (isIncoming ? 'Cliente' : 'Coordinador')}
                         </span>
                         <span className="text-[10px] text-slate-400 flex items-center gap-1 font-mono">
                           <Clock className="w-3 h-3" />
-                          {new Date(note.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short' })}
+                          {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short' })}
                         </span>
                       </div>
-                      <p className="whitespace-pre-wrap font-medium">{note.content}</p>
+                      <p className="whitespace-pre-wrap font-medium">{text}</p>
                     </div>
                   );
                 })
@@ -570,7 +576,7 @@ export default function LeadsPage() {
         </div>
       )}
 
-      {/* MODAL DE ENVÍO CON SELECTOR DE PREFIJO */}
+      {/* MODAL DE ENVÍO WHATSAPP OFICIAL META */}
       {activeWhatsAppLead && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
           <div className="bg-white rounded-2xl max-w-lg w-full p-5 shadow-2xl border border-slate-200 space-y-4">
@@ -635,7 +641,7 @@ export default function LeadsPage() {
                   />
                 </div>
                 <p className="text-[10px] text-slate-400 mt-1">
-                  Se enviará a: <strong className="text-slate-600 font-mono">+{countryCode} {targetPhone}</strong>
+                  Se transmitirá a: <strong className="text-slate-600 font-mono">+{countryCode} {targetPhone}</strong>
                 </p>
               </div>
 
