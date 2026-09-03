@@ -4,20 +4,21 @@ import { supabase } from '@/lib/supabase';
 
 export async function POST(req: Request) {
   try {
-    const { leadId, phone, messageText, coordinatorName } = await req.json();
+    const { leadId, phone, countryCode, messageText, coordinatorName } = await req.json();
 
     if (!phone || !messageText) {
       return NextResponse.json({ error: 'Teléfono y mensaje son obligatorios' }, { status: 400 });
     }
 
-    // 1. Limpieza y estandarización de formato telefónico E.164
-    let cleanPhone = phone.replace(/\D/g, '');
-    
-    // Si tiene 10 dígitos:
-    // Si empieza por 3 (móvil colombiano), anteponer 57
-    // De lo contrario (ej. códigos de área de Florida 305, 786, 954, 561), anteponer 1
-    if (cleanPhone.length === 10) {
-      cleanPhone = cleanPhone.startsWith('3') ? `57${cleanPhone}` : `1${cleanPhone}`;
+    // 1. Limpieza estricta de caracteres
+    const rawDigits = phone.replace(/\D/g, '');
+    const prefix = (countryCode || '57').replace(/\D/g, '');
+
+    let cleanPhone = rawDigits;
+
+    // Si el usuario no incluyó el código de país en el número, se lo anteponemos
+    if (!rawDigits.startsWith(prefix)) {
+      cleanPhone = `${prefix}${rawDigits}`;
     }
 
     const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
@@ -30,7 +31,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // 2. Intentar primer envío como texto directo
+    // 2. Intentar envío de texto regular
     let payloadBody: Record<string, unknown> = {
       messaging_product: 'whatsapp',
       to: cleanPhone,
@@ -52,7 +53,7 @@ export async function POST(req: Request) {
 
     let metaData = await metaResponse.json();
 
-    // 3. Si Meta rechaza por ventana de 24 horas o primer contacto, fallback a plantilla hello_world
+    // 3. Fallback a plantilla oficial si la ventana de 24 horas está cerrada o requiere template
     if (!metaResponse.ok && (metaData.error?.code === 131047 || metaData.error?.code === 131005)) {
       payloadBody = {
         messaging_product: 'whatsapp',
@@ -84,7 +85,7 @@ export async function POST(req: Request) {
       const detail = metaData.error?.message || 'Error al procesar con Meta';
       const code = metaData.error?.code ? `(#${metaData.error.code}) ` : '';
       return NextResponse.json(
-        { error: `${code}${detail}. Recuerda verificar el número de destino en el panel de desarrolladores de Meta si estás usando el número de prueba.` },
+        { error: `${code}${detail}. Verifica que el número +${cleanPhone} esté registrado en el panel de pruebas de Meta.` },
         { status: metaResponse.status }
       );
     }
@@ -96,7 +97,7 @@ export async function POST(req: Request) {
       await supabase.from('lead_notes').insert([
         {
           lead_id: leadId,
-          content: `[WhatsApp Oficial Enviado]: "${messageText}" (Enviado por: ${coordinatorName || 'Coordinador'}) [ID: ${messageId}]`,
+          content: `[WhatsApp Oficial Enviado a +${cleanPhone}]: "${messageText}" (Enviado por: ${coordinatorName || 'Coordinador'}) [ID: ${messageId}]`,
         },
       ]);
 
@@ -118,7 +119,7 @@ export async function POST(req: Request) {
         .eq('id', leadId);
     }
 
-    return NextResponse.json({ success: true, metaData });
+    return NextResponse.json({ success: true, metaData, targetPhone: cleanPhone });
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : 'Error desconocido';
     return NextResponse.json({ error: errorMsg }, { status: 500 });

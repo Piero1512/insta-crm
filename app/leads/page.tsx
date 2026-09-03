@@ -62,11 +62,13 @@ export default function LeadsPage() {
 
   // Modal WhatsApp Oficial
   const [activeWhatsAppLead, setActiveWhatsAppLead] = useState<Lead | null>(null);
+  const [targetPhone, setTargetPhone] = useState('');
+  const [countryCode, setCountryCode] = useState('57');
   const [customMessage, setCustomMessage] = useState('');
   const [sendingWhatsApp, setSendingWhatsApp] = useState(false);
   const [waStatusFeedback, setWaStatusFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Cargar información inicial
+  // Cargar datos
   const loadInitialData = async () => {
     setLoading(true);
 
@@ -103,19 +105,37 @@ export default function LeadsPage() {
     loadInitialData();
   }, []);
 
-  // Abrir modal de WhatsApp con plantilla predeterminada
+  // Abrir modal configurando teléfono y prefijo inteligente
   const openWhatsAppModal = (lead: Lead) => {
     setActiveWhatsAppLead(lead);
     setWaStatusFeedback(null);
+
+    const digitsOnly = lead.phone.replace(/\D/g, '');
+
+    // Detección automática inicial: si empieza por 3 suele ser celular Colombia (+57), de lo contrario USA (+1)
+    if (digitsOnly.startsWith('57')) {
+      setCountryCode('57');
+      setTargetPhone(digitsOnly.slice(2));
+    } else if (digitsOnly.startsWith('1') && digitsOnly.length > 10) {
+      setCountryCode('1');
+      setTargetPhone(digitsOnly.slice(1));
+    } else if (digitsOnly.startsWith('3')) {
+      setCountryCode('57');
+      setTargetPhone(digitsOnly);
+    } else {
+      setCountryCode('1');
+      setTargetPhone(digitsOnly);
+    }
+
     setCustomMessage(
       `Hola ${lead.client_name}, te saludamos de Insta Contractors Florida. Nos ponemos en contacto contigo respecto a tu solicitud de ${lead.service_type}. ¿En qué horario te resultaría conveniente coordinar una breve visita técnica?`
     );
   };
 
-  // Envío mediante API oficial de WhatsApp
+  // Enviar WhatsApp oficial
   const handleSendOfficialWhatsApp = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeWhatsAppLead || !customMessage.trim()) return;
+    if (!activeWhatsAppLead || !customMessage.trim() || !targetPhone.trim()) return;
 
     setSendingWhatsApp(true);
     setWaStatusFeedback(null);
@@ -126,7 +146,8 @@ export default function LeadsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           leadId: activeWhatsAppLead.id,
-          phone: activeWhatsAppLead.phone,
+          phone: targetPhone.trim(),
+          countryCode: countryCode,
           messageText: customMessage.trim(),
           coordinatorId: currentProfile?.id,
           coordinatorName: currentProfile?.full_name,
@@ -138,10 +159,10 @@ export default function LeadsPage() {
       if (res.ok && data.success) {
         setWaStatusFeedback({
           type: 'success',
-          text: 'Mensaje oficial enviado con éxito a través de Meta API. Se actualizó la bitácora del lead.',
+          text: `Mensaje transmitido exitosamente a +${data.targetPhone}. La bitácora fue actualizada.`,
         });
 
-        // Actualizar el contador local inmediatamente de forma segura
+        // Actualizar contador visualmente
         setLeads((prev) =>
           prev.map((l) =>
             l.id === activeWhatsAppLead.id
@@ -152,7 +173,7 @@ export default function LeadsPage() {
 
         setTimeout(() => {
           setActiveWhatsAppLead(null);
-        }, 1800);
+        }, 2000);
       } else {
         setWaStatusFeedback({
           type: 'error',
@@ -162,14 +183,14 @@ export default function LeadsPage() {
     } catch {
       setWaStatusFeedback({
         type: 'error',
-        text: 'Error de conexión con el servidor de mensajería',
+        text: 'Error de conexión con el servidor',
       });
     } finally {
       setSendingWhatsApp(false);
     }
   };
 
-  // Filtrado de leads
+  // Filtros
   const filteredLeads = useMemo(() => {
     return leads.filter((lead) => {
       const matchSearch =
@@ -303,7 +324,7 @@ export default function LeadsPage() {
                   </tr>
                 ) : filteredLeads.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="text-center py-12 text-slate-400">No se encontraron leads con los filtros seleccionados.</td>
+                    <td colSpan={6} className="text-center py-12 text-slate-400">No se encontraron leads.</td>
                   </tr>
                 ) : (
                   filteredLeads.map((lead) => (
@@ -343,7 +364,6 @@ export default function LeadsPage() {
                         </div>
                       </td>
 
-                      {/* Contador 4+4 */}
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-2">
                           <span className="flex items-center gap-1 text-[11px] font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md">
@@ -371,20 +391,18 @@ export default function LeadsPage() {
 
                       <td className="py-3 px-4 text-right">
                         <div className="flex items-center justify-end gap-1">
-                          {/* Llamada rápida */}
                           <a
                             href={`tel:${lead.phone}`}
                             className="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                            title="Llamar teléfono"
+                            title="Llamar"
                           >
                             <Phone className="w-4 h-4" />
                           </a>
 
-                          {/* BOTÓN OFICIAL WHATSAPP API */}
                           <button
                             onClick={() => openWhatsAppModal(lead)}
                             className="p-1.5 text-slate-400 hover:text-sky-600 hover:bg-sky-50 rounded-lg transition-colors"
-                            title="Enviar WhatsApp Oficial (Meta API)"
+                            title="Enviar WhatsApp Oficial"
                           >
                             <MessageSquare className="w-4 h-4" />
                           </button>
@@ -406,7 +424,7 @@ export default function LeadsPage() {
         </div>
       </div>
 
-      {/* MODAL DE ENVÍO WHATSAPP OFICIAL META */}
+      {/* MODAL DE ENVÍO CON SELECTOR DE PREFIJO EDITABLE */}
       {activeWhatsAppLead && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
           <div className="bg-white rounded-2xl max-w-lg w-full p-5 shadow-2xl border border-slate-200 space-y-4">
@@ -416,11 +434,9 @@ export default function LeadsPage() {
                   <MessageSquare className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-sm text-slate-800">
-                    Enviar WhatsApp Oficial
-                  </h3>
+                  <h3 className="font-bold text-sm text-slate-800">Enviar WhatsApp Oficial</h3>
                   <p className="text-[11px] text-slate-500">
-                    Para: <span className="font-semibold text-slate-700">{activeWhatsAppLead.client_name}</span> ({activeWhatsAppLead.phone})
+                    Destinatario: <span className="font-semibold text-slate-700">{activeWhatsAppLead.client_name}</span>
                   </p>
                 </div>
               </div>
@@ -450,9 +466,37 @@ export default function LeadsPage() {
             )}
 
             <form onSubmit={handleSendOfficialWhatsApp} className="space-y-3">
+              {/* SELECTOR DE PAÍS Y TELÉFONO EDITABLE */}
               <div>
                 <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1.5">
-                  Mensaje Saliente (Línea Oficial Meta)
+                  Número de Destino & Código de País
+                </label>
+                <div className="flex gap-2">
+                  <select
+                    value={countryCode}
+                    onChange={(e) => setCountryCode(e.target.value)}
+                    className="w-40 px-2.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 focus:outline-none focus:border-sky-500"
+                  >
+                    <option value="57">🇨🇴 Col (+57)</option>
+                    <option value="1">🇺🇸 USA (+1)</option>
+                  </select>
+
+                  <input
+                    type="text"
+                    value={targetPhone}
+                    onChange={(e) => setTargetPhone(e.target.value)}
+                    placeholder="Ej. 3043456661"
+                    className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Se enviará a: <strong className="text-slate-600 font-mono">+{countryCode} {targetPhone}</strong>
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1.5">
+                  Mensaje Saliente
                 </label>
                 <textarea
                   rows={4}
@@ -466,7 +510,7 @@ export default function LeadsPage() {
               <div className="bg-sky-50/60 p-3 rounded-xl border border-sky-100 text-[11px] text-sky-800 space-y-1">
                 <p className="font-semibold">Auditoría Automática Activa:</p>
                 <p className="text-slate-600">
-                  Este mensaje se transmitirá por la cuenta comercial de Meta. Al enviarse, el CRM sumará automáticamente el contador a <strong>{((activeWhatsAppLead.whatsapp_count ?? 0) + 1)}/4</strong> y registrará la copia exacta en la bitácora del lead.
+                  Al confirmar, el CRM transmitirá el mensaje por Meta API, incrementará el contador a <strong>{((activeWhatsAppLead.whatsapp_count ?? 0) + 1)}/4</strong> y guardará la copia en la bitácora del lead.
                 </p>
               </div>
 
@@ -480,11 +524,11 @@ export default function LeadsPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={sendingWhatsApp || !customMessage.trim()}
+                  disabled={sendingWhatsApp || !customMessage.trim() || !targetPhone.trim()}
                   className="px-5 py-2 bg-sky-600 hover:bg-sky-700 disabled:bg-slate-200 text-white text-xs font-bold rounded-xl shadow-xs flex items-center gap-1.5 transition-colors"
                 >
                   <Send className="w-3.5 h-3.5" />
-                  <span>{sendingWhatsApp ? 'Transmitiendo a Meta...' : 'Enviar Mensaje Oficial'}</span>
+                  <span>{sendingWhatsApp ? 'Transmitiendo...' : 'Enviar Mensaje Oficial'}</span>
                 </button>
               </div>
             </form>
