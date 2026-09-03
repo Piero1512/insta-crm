@@ -36,6 +36,9 @@ import {
   Clock,
   ExternalLink,
   DollarSign,
+  Gift,
+  Sparkles,
+  RefreshCw,
   X
 } from 'lucide-react';
 
@@ -66,9 +69,13 @@ export default function LeadsPage() {
   const [coordinators, setCoordinators] = useState<CoordinatorOption[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Modo de visualización: Tabla o Embudo Kanban
-  const [viewMode, setViewMode] = useState<'table' | 'kanban'>('table');
+  // Vistas: 'table' | 'kanban' | 'retention' (Fidelización LTV)
+  const [viewMode, setViewMode] = useState<'table' | 'kanban' | 'retention'>('table');
   
+  // Drag and drop state
+  const [draggedLeadId, setDraggedLeadId] = useState<string | null>(null);
+  const [dragOverStage, setDragOverStage] = useState<LeadStatus | null>(null);
+
   // Alerta Realtime
   const [newLeadBanner, setNewLeadBanner] = useState<string | null>(null);
 
@@ -215,7 +222,7 @@ export default function LeadsPage() {
   }, [leads]);
 
   // WhatsApp
-  const handleOpenWhatsAppModal = (lead: Lead) => {
+  const handleOpenWhatsAppModal = (lead: Lead, customMessage?: string) => {
     setWhatsAppLead(lead);
     const raw = lead.phone.trim();
     if (raw.startsWith('+57')) {
@@ -235,9 +242,13 @@ export default function LeadsPage() {
       setWaCustomPhone(raw);
     }
 
-    setWaMessageBody(
-      `Hola ${lead.client_name}, le saludamos de Insta CRM Florida Contractors. Recibimos su solicitud para ${lead.service_type}. ¿A qué hora le resultaría conveniente coordinar una breve llamada o visita técnica a su propiedad?`
-    );
+    if (customMessage) {
+      setWaMessageBody(customMessage);
+    } else {
+      setWaMessageBody(
+        `Hola ${lead.client_name}, le saludamos de Insta CRM Florida Contractors. Recibimos su solicitud para ${lead.service_type}. ¿A qué hora le resultaría conveniente coordinar una breve llamada o visita técnica a su propiedad?`
+      );
+    }
   };
 
   const handleSendWhatsApp = async () => {
@@ -290,6 +301,35 @@ export default function LeadsPage() {
     if (!error) {
       setLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, status: newStatus } : l)));
     }
+  };
+
+  // --- DRAG AND DROP NATIVO PARA EL KANBAN ---
+  const handleDragStart = (e: React.DragEvent, leadId: string) => {
+    setDraggedLeadId(leadId);
+    e.dataTransfer.setData('text/plain', leadId);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e: React.DragEvent, stageId: LeadStatus) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (dragOverStage !== stageId) {
+      setDragOverStage(stageId);
+    }
+  };
+
+  const handleDragLeave = () => {
+    setDragOverStage(null);
+  };
+
+  const handleDrop = async (e: React.DragEvent, targetStage: LeadStatus) => {
+    e.preventDefault();
+    setDragOverStage(null);
+    const leadId = draggedLeadId || e.dataTransfer.getData('text/plain');
+    if (!leadId) return;
+
+    await handleMoveStage(leadId, targetStage);
+    setDraggedLeadId(null);
   };
 
   // Visita Express
@@ -504,6 +544,11 @@ export default function LeadsPage() {
     });
   }, [leads, searchQuery, filterCounty, filterStatus, filterCoordinator, filterSource]);
 
+  // Leads en etapa "cerrado_ganado" para la vista de Retención & LTV
+  const wonClients = useMemo(() => {
+    return leads.filter((l) => l.status === 'cerrado_ganado');
+  }, [leads]);
+
   const resetFilters = () => {
     setSearchQuery('');
     setFilterCounty('all');
@@ -573,14 +618,14 @@ export default function LeadsPage() {
         {/* Cabecera Principal */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <h2 className="text-xl sm:text-2xl font-bold text-slate-800">Leads & Prospectos</h2>
+            <h2 className="text-xl sm:text-2xl font-bold text-slate-800">Leads & Pipeline</h2>
             <p className="text-xs sm:text-sm text-slate-500">
-              Ficha 360°, bitácora de notas, calificación predictiva y protocolo 4+4
+              Arrastre inteligente Drag & Drop, Ficha 360°, Scoring y Retención Postventa (LTV)
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            {/* Selector de Vistas: Tabla vs Embudo Kanban */}
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Selector de Vistas: Lista, Kanban y Retención LTV */}
             <div className="bg-slate-200/80 p-1 rounded-xl flex items-center gap-1 border border-slate-300">
               <button
                 onClick={() => setViewMode('table')}
@@ -598,7 +643,16 @@ export default function LeadsPage() {
                 }`}
               >
                 <KanbanSquare className="w-3.5 h-3.5" />
-                <span>Pipeline Kanban</span>
+                <span>Pipeline Drag&Drop</span>
+              </button>
+              <button
+                onClick={() => setViewMode('retention')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                  viewMode === 'retention' ? 'bg-white text-emerald-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Retención (LTV)</span>
               </button>
             </div>
 
@@ -649,103 +703,105 @@ export default function LeadsPage() {
               <TrendingUp className="w-5 h-5" />
             </div>
             <div>
-              <p className="text-[11px] font-bold text-slate-400 uppercase">En Inspección/Cierre</p>
-              <h4 className="text-xl sm:text-2xl font-bold text-slate-800">{kpis.visitsDone}</h4>
+              <p className="text-[11px] font-bold text-slate-400 uppercase">Obras Ganadas (LTV)</p>
+              <h4 className="text-xl sm:text-2xl font-bold text-emerald-600">{wonClients.length}</h4>
             </div>
           </div>
         </div>
 
-        {/* Barra de Filtros */}
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-700 uppercase flex items-center gap-1.5">
-              <Filter className="w-3.5 h-3.5 text-blue-600" />
-              Filtros Multicriterio & Segmentación
-            </span>
-            {hasActiveFilters && (
-              <button
-                onClick={resetFilters}
-                className="text-xs text-rose-600 hover:text-rose-700 flex items-center gap-1 font-semibold transition-colors"
-              >
-                <RotateCcw className="w-3 h-3" /> Limpiar filtros
-              </button>
-            )}
+        {/* Barra de Filtros (Oculta en vista LTV para simplificar) */}
+        {viewMode !== 'retention' && (
+          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-700 uppercase flex items-center gap-1.5">
+                <Filter className="w-3.5 h-3.5 text-blue-600" />
+                Filtros Multicriterio & Segmentación
+              </span>
+              {hasActiveFilters && (
+                <button
+                  onClick={resetFilters}
+                  className="text-xs text-rose-600 hover:text-rose-700 flex items-center gap-1 font-semibold transition-colors"
+                >
+                  <RotateCcw className="w-3 h-3" /> Limpiar filtros
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+              <div className="relative">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Buscar cliente, tel, zip..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-blue-500 text-slate-800"
+                />
+              </div>
+
+              <div>
+                <select
+                  value={filterCounty}
+                  onChange={(e) => setFilterCounty(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-800 font-medium"
+                >
+                  <option value="all">Condado: Todos</option>
+                  <option value="miami-dade">Miami-Dade</option>
+                  <option value="broward">Broward</option>
+                  <option value="palm beach">Palm Beach</option>
+                </select>
+              </div>
+
+              <div>
+                <select
+                  value={filterSource}
+                  onChange={(e) => setFilterSource(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-800 font-medium"
+                >
+                  <option value="all">Canal: Todos</option>
+                  <option value="meta_ads">Meta Ads</option>
+                  <option value="google_ads">Google Ads</option>
+                  <option value="landing_page">Web / Form</option>
+                  <option value="referido">Referido</option>
+                  <option value="directo">Directo</option>
+                </select>
+              </div>
+
+              <div>
+                <select
+                  value={filterStatus}
+                  onChange={(e) => setFilterStatus(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-800 font-medium"
+                >
+                  <option value="all">Estado: Todos</option>
+                  <option value="nuevo">Nuevo</option>
+                  <option value="en_seguimiento">En Seguimiento</option>
+                  <option value="visita_realizada">Visita Realizada</option>
+                  <option value="presupuestado">Presupuestado</option>
+                  <option value="cerrado_ganado">Cerrado Ganado</option>
+                  <option value="cerrado_perdido">Cerrado Perdido</option>
+                </select>
+              </div>
+
+              <div>
+                <select
+                  value={filterCoordinator}
+                  onChange={(e) => setFilterCoordinator(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-800 font-medium"
+                >
+                  <option value="all">Asignación: Todos</option>
+                  <option value="unassigned">Sin Asignar</option>
+                  {coordinators.map((c) => (
+                    <option key={c.id} value={c.id}>{c.full_name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
           </div>
+        )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-            <div className="relative">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                placeholder="Buscar cliente, tel, zip..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-blue-500 text-slate-800"
-              />
-            </div>
-
-            <div>
-              <select
-                value={filterCounty}
-                onChange={(e) => setFilterCounty(e.target.value)}
-                className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-800 font-medium"
-              >
-                <option value="all">Condado: Todos</option>
-                <option value="miami-dade">Miami-Dade</option>
-                <option value="broward">Broward</option>
-                <option value="palm beach">Palm Beach</option>
-              </select>
-            </div>
-
-            <div>
-              <select
-                value={filterSource}
-                onChange={(e) => setFilterSource(e.target.value)}
-                className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-800 font-medium"
-              >
-                <option value="all">Canal: Todos</option>
-                <option value="meta_ads">Meta Ads</option>
-                <option value="google_ads">Google Ads</option>
-                <option value="landing_page">Web / Form</option>
-                <option value="referido">Referido</option>
-                <option value="directo">Directo</option>
-              </select>
-            </div>
-
-            <div>
-              <select
-                value={filterStatus}
-                onChange={(e) => setFilterStatus(e.target.value)}
-                className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-800 font-medium"
-              >
-                <option value="all">Estado: Todos</option>
-                <option value="nuevo">Nuevo</option>
-                <option value="en_seguimiento">En Seguimiento</option>
-                <option value="visita_realizada">Visita Realizada</option>
-                <option value="presupuestado">Presupuestado</option>
-                <option value="cerrado_ganado">Cerrado Ganado</option>
-                <option value="cerrado_perdido">Cerrado Perdido</option>
-              </select>
-            </div>
-
-            <div>
-              <select
-                value={filterCoordinator}
-                onChange={(e) => setFilterCoordinator(e.target.value)}
-                className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-800 font-medium"
-              >
-                <option value="all">Asignación: Todos</option>
-                <option value="unassigned">Sin Asignar</option>
-                {coordinators.map((c) => (
-                  <option key={c.id} value={c.id}>{c.full_name}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-        </div>
-
-        {/* MODO TABLA O KANBAN */}
-        {viewMode === 'table' ? (
+        {/* --- VISTA 1: TABLA --- */}
+        {viewMode === 'table' && (
           <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
             <div className="p-4 sm:p-6 border-b border-slate-100 flex items-center justify-between">
               <h3 className="font-bold text-slate-800 text-sm sm:text-base">Bandeja Inteligente de Leads</h3>
@@ -784,7 +840,6 @@ export default function LeadsPage() {
                     filteredLeads.map((lead) => (
                       <tr key={lead.id} className="hover:bg-slate-50/80 transition-colors">
                         <td className="py-3 px-4">
-                          {/* Clic en el nombre para abrir Ficha 360° */}
                           <button
                             onClick={() => handleOpen360(lead)}
                             className="text-left group focus:outline-none"
@@ -890,14 +945,25 @@ export default function LeadsPage() {
               </table>
             </div>
           </div>
-        ) : (
-          /* MODO KANBAN */
+        )}
+
+        {/* --- VISTA 2: PIPELINE KANBAN CON DRAG & DROP NATIVO --- */}
+        {viewMode === 'kanban' && (
           <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 overflow-x-auto pb-4">
             {KANBAN_STAGES.map((stage) => {
               const stageLeads = filteredLeads.filter((l) => l.status === stage.id);
+              const isOver = dragOverStage === stage.id;
 
               return (
-                <div key={stage.id} className="bg-slate-100/80 rounded-2xl p-3 border border-slate-200 flex flex-col min-w-[260px]">
+                <div
+                  key={stage.id}
+                  onDragOver={(e) => handleDragOver(e, stage.id)}
+                  onDragLeave={handleDragLeave}
+                  onDrop={(e) => handleDrop(e, stage.id)}
+                  className={`rounded-2xl p-3 border transition-all flex flex-col min-w-[260px] ${
+                    isOver ? 'bg-blue-100/70 border-blue-400 ring-2 ring-blue-300' : 'bg-slate-100/80 border-slate-200'
+                  }`}
+                >
                   <div className="flex items-center justify-between pb-3 border-b border-slate-200/80 mb-3">
                     <span className={`text-xs font-bold px-2.5 py-1 rounded-lg border ${stage.color} ${stage.border}`}>
                       {stage.label}
@@ -909,14 +975,18 @@ export default function LeadsPage() {
 
                   <div className="space-y-3 flex-1 overflow-y-auto max-h-[600px] pr-1">
                     {stageLeads.length === 0 ? (
-                      <div className="text-center py-6 text-xs text-slate-400 border-2 border-dashed border-slate-200 rounded-xl">
-                        Sin leads en esta fase
+                      <div className="text-center py-8 text-xs text-slate-400 border-2 border-dashed border-slate-200 rounded-xl">
+                        Arrastra una tarjeta aquí
                       </div>
                     ) : (
                       stageLeads.map((lead) => (
                         <div
                           key={lead.id}
-                          className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs hover:shadow-md transition-shadow space-y-2.5"
+                          draggable
+                          onDragStart={(e) => handleDragStart(e, lead.id)}
+                          className={`bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs hover:shadow-md transition-all cursor-grab active:cursor-grabbing space-y-2.5 ${
+                            draggedLeadId === lead.id ? 'opacity-40 scale-95' : 'opacity-100'
+                          }`}
                         >
                           <div className="flex items-start justify-between gap-1">
                             <button
@@ -978,13 +1048,116 @@ export default function LeadsPage() {
             })}
           </div>
         )}
+
+        {/* --- VISTA 3: RETENCIÓN, FIDELIZACIÓN & LTV (POSTVENTA) --- */}
+        {viewMode === 'retention' && (
+          <div className="space-y-4">
+            <div className="bg-emerald-900 text-white p-5 rounded-2xl shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h3 className="font-bold text-lg flex items-center gap-2">
+                  <Gift className="w-5 h-5 text-emerald-300" />
+                  Hub de Retención & LTV (Customer Lifetime Value)
+                </h3>
+                <p className="text-xs text-emerald-100 mt-1 max-w-2xl">
+                  Los clientes que ya contrataron obras contigo son tu activo de mayor rentabilidad. 
+                  Usa estos disparadores automáticos de WhatsApp para mantenimiento preventivo y promociones de temporada.
+                </p>
+              </div>
+              <div className="text-right">
+                <span className="text-xs text-emerald-200 font-semibold uppercase">Cartera Ganada</span>
+                <p className="text-2xl font-bold">{wonClients.length} Clientes</p>
+              </div>
+            </div>
+
+            {wonClients.length === 0 ? (
+              <div className="bg-white p-12 text-center rounded-2xl border border-slate-200 space-y-3">
+                <Sparkles className="w-8 h-8 text-amber-500 mx-auto" />
+                <h4 className="font-bold text-slate-800">Aún no hay clientes en etapa Cerrado Ganado</h4>
+                <p className="text-xs text-slate-500 max-w-md mx-auto">
+                  Arrastra o mueve un lead a la columna <strong>"Ganados (Obras)"</strong> en el Pipeline cuando se firme el contrato para activar sus campañas de retención aquí.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {wonClients.map((client) => (
+                  <div key={client.id} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <h4 className="font-bold text-slate-800 text-sm">{client.client_name}</h4>
+                        <p className="text-xs text-slate-500">{client.service_type}</p>
+                      </div>
+                      <span className="px-2.5 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full text-[10px] font-bold">
+                        Cliente Ganado
+                      </span>
+                    </div>
+
+                    <div className="text-xs text-slate-600 space-y-1 bg-slate-50 p-3 rounded-xl">
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Teléfono:</span>
+                        <span className="font-semibold">{client.phone}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Condado:</span>
+                        <span className="font-semibold capitalize">{client.location_county}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Presupuesto original:</span>
+                        <span className="font-semibold">{client.budget_range || '$5k - $15k'}</span>
+                      </div>
+                    </div>
+
+                    {/* Disparadores de Campañas LTV */}
+                    <div className="space-y-2 pt-2 border-t border-slate-100">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                        Campañas de Reactivación WhatsApp
+                      </span>
+
+                      {/* Plantilla 1: Mantenimiento Preventivo (6 meses) */}
+                      <button
+                        onClick={() =>
+                          handleOpenWhatsAppModal(
+                            client,
+                            `Hola ${client.client_name}, ¿cómo está todo? Le saluda el equipo de Insta CRM Florida Contractors. Queríamos saber cómo quedó todo con su obra de ${client.service_type}. Estamos ofreciendo una inspección preventiva de cortesía para nuestros clientes preferenciales. ¿Le gustaría que pasemos a revisar?`
+                          )
+                        }
+                        className="w-full text-left p-2.5 bg-emerald-50/60 hover:bg-emerald-100/80 border border-emerald-200 rounded-xl transition-colors flex items-center justify-between group"
+                      >
+                        <div>
+                          <p className="font-bold text-emerald-900 text-xs">Mantenimiento Preventivo (6m)</p>
+                          <span className="text-[10px] text-emerald-700">Revisión de garantía y satisfacción</span>
+                        </div>
+                        <Send className="w-3.5 h-3.5 text-emerald-600 group-hover:translate-x-0.5 transition-transform" />
+                      </button>
+
+                      {/* Plantilla 2: Nueva Obra con Descuento */}
+                      <button
+                        onClick={() =>
+                          handleOpenWhatsAppModal(
+                            client,
+                            `Hola ${client.client_name}, un gusto saludarle nuevamente de Insta CRM Florida Contractors. Por ser cliente activo, tenemos un 10% de descuento en mano de obra para su próximo proyecto de remodelación, pisos, drywall o pintura antes del próximo mes. ¿Tiene algún área de su casa que le gustaría actualizar?`
+                          )
+                        }
+                        className="w-full text-left p-2.5 bg-blue-50/60 hover:bg-blue-100/80 border border-blue-200 rounded-xl transition-colors flex items-center justify-between group"
+                      >
+                        <div>
+                          <p className="font-bold text-blue-900 text-xs">Descuento Cliente VIP (10%)</p>
+                          <span className="text-[10px] text-blue-700">Incentivo para segunda remodelación</span>
+                        </div>
+                        <Send className="w-3.5 h-3.5 text-blue-600 group-hover:translate-x-0.5 transition-transform" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* FICHA 360°: DRAWER LATERAL */}
       {selectedLead360 && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex justify-end animate-in fade-in duration-200">
           <div className="bg-white w-full max-w-xl h-full shadow-2xl flex flex-col border-l border-slate-200 animate-in slide-in-from-right duration-300">
-            {/* Cabecera del Drawer */}
             <div className="p-5 border-b border-slate-200 bg-slate-50 flex items-start justify-between">
               <div>
                 <div className="flex items-center gap-2">
@@ -1003,9 +1176,7 @@ export default function LeadsPage() {
               </button>
             </div>
 
-            {/* Contenido desplazable */}
             <div className="flex-1 overflow-y-auto p-5 space-y-6 text-xs">
-              {/* Información General */}
               <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
                 <span className="font-bold text-slate-700 uppercase tracking-wider text-[10px]">
                   Datos de Contacto & Proyecto
@@ -1038,7 +1209,6 @@ export default function LeadsPage() {
                 )}
               </div>
 
-              {/* Historial de Inspecciones Técnicas */}
               <div>
                 <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[11px] flex items-center gap-1.5 mb-2.5">
                   <Navigation className="w-3.5 h-3.5 text-indigo-600" />
@@ -1075,7 +1245,6 @@ export default function LeadsPage() {
                 )}
               </div>
 
-              {/* Presupuestos / Cotizaciones Asociadas */}
               <div>
                 <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[11px] flex items-center gap-1.5 mb-2.5">
                   <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
@@ -1101,20 +1270,18 @@ export default function LeadsPage() {
                 )}
               </div>
 
-              {/* Bitácora de Notas y Seguimiento Comercial */}
               <div className="space-y-3 pt-2">
                 <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
                   <Clock className="w-3.5 h-3.5 text-blue-600" />
                   Bitácora Cronológica & Notas del Asesor
                 </h4>
 
-                {/* Formulario Agregar Nota */}
                 <form onSubmit={handleAddNote} className="space-y-2">
                   <textarea
                     rows={2}
                     value={newNoteText}
                     onChange={(e) => setNewNoteText(e.target.value)}
-                    placeholder="Escribe una nota rápida de seguimiento (ej. cliente solicitó cambio de fecha)..."
+                    placeholder="Escribe una nota rápida de seguimiento..."
                     className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 text-xs focus:outline-none focus:border-blue-500"
                   />
                   <div className="flex justify-end">
@@ -1129,7 +1296,6 @@ export default function LeadsPage() {
                   </div>
                 </form>
 
-                {/* Lista de Notas */}
                 <div className="space-y-2.5 pt-2">
                   {loadingNotes ? (
                     <p className="text-slate-400 text-center py-2">Cargando historial...</p>
@@ -1150,7 +1316,6 @@ export default function LeadsPage() {
               </div>
             </div>
 
-            {/* Pie del Drawer con Acciones Rápidas */}
             <div className="p-4 border-t border-slate-200 bg-slate-50 flex items-center justify-between gap-2">
               <button
                 onClick={() => {
