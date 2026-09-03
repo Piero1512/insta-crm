@@ -30,9 +30,17 @@ interface NotificationItem {
   created_at: string;
 }
 
+interface Profile {
+  id: string;
+  full_name: string;
+  role: string;
+  email?: string;
+}
+
 export default function Header({ onMenuClick, onToggleMenu }: HeaderProps) {
   const router = useRouter();
   const [userEmail, setUserEmail] = useState<string>('');
+  const [currentProfile, setCurrentProfile] = useState<Profile | null>(null);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
@@ -48,26 +56,119 @@ export default function Header({ onMenuClick, onToggleMenu }: HeaderProps) {
       setIsMuted(savedMute === 'true');
     }
 
-    const checkUser = async () => {
+    // Obtener sesión activa y vincular con su perfil en DB
+    const identifyActiveUser = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (user?.email) {
         setUserEmail(user.email);
+
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('id, full_name, role, email')
+          .or(`id.eq.${user.id},email.eq.${user.email}`)
+          .maybeSingle();
+
+        if (profile) {
+          setCurrentProfile(profile);
+        }
       }
     };
-    checkUser();
 
-    // Suscripción Realtime a nuevos leads y mensajes internos
+    identifyActiveUser();
+
+    // Cerrar el dropdown al hacer clic fuera
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  // Suscripción Realtime con filtrado estricto por destinatario
+  useEffect(() => {
+    if (!currentProfile) return;
+
     const channel = supabase
-      .channel('public:global_notifications')
+      .channel(`public:targeted_notifications_${currentProfile.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'internal_messages' },
+        async (payload) => {
+          const newMsg = payload.new as { 
+            id: string; 
+            sender_id: string; 
+            receiver_id: string | null; 
+            content: string; 
+          };
+
+          // 1. Si yo mismo envié el mensaje, jamás me notifico a mí mismo
+          if (newMsg.sender_id === currentProfile.id) return;
+
+          // 2. Si es mensaje privado: solo notifico si soy YO el destinatario (receiver_id)
+          // 3. Si receiver_id es NULL, es el canal general del equipo
+          const isForMe = newMsg.receiver_id === currentProfile.id;
+          const isForTeam = newMsg.receiver_id === null;
+
+          if (!isForMe && !isForTeam) return;
+
+          // Obtener nombre del remitente
+          const { data: sender } = await supabase
+            .from('profiles')
+            .select('full_name')
+            .eq('id', newMsg.sender_id)
+            .maybeSingle();
+
+          const senderName = sender?.full_name || 'Compañero';
+          const notificationTitle = isForTeam 
+            ? `Canal General: ${senderName}` 
+            : `Mensaje de ${senderName}`;
+
+          const item: NotificationItem = {
+            id: `msg_${Date.now()}_${Math.random()}`,
+            type: 'message',
+            title: notificationTitle,
+            description: newMsg.content.slice(0, 60),
+            link: '/messages',
+            created_at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          };
+
+          setNotifications((prev) => [item, ...prev]);
+
+          if (localStorage.getItem('insta_crm_messages_muted') !== 'true') {
+            playNotificationSound();
+          }
+        }
+      )
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'leads' },
         (payload) => {
-          const newLead = payload.new as { id: string; client_name: string; service_type: string };
+          const newLead = payload.new as { 
+            id: string; 
+            client_name: string; 
+            service_type: string; 
+            assigned_to: string | null; 
+          };
+
+          const isAdmin = currentProfile.role === 'admin';
+          const isAssignedToMe = newLead.assigned_to === currentProfile.id;
+          const isUnassigned = newLead.assigned_to === null;
+
+          // Notificar si:
+          // - Viene asignado directamente a este usuario
+          // - O el usuario es administrador
+          // - O viene sin asignar para que el equipo lo vea
+          if (!isAssignedToMe && !isAdmin && !isUnassigned) return;
+
           const item: NotificationItem = {
-            id: `lead_${Date.now()}`,
+            id: `lead_${Date.now()}_${Math.random()}`,
             type: 'lead',
-            title: 'Nuevo Lead Recibido',
+            title: isAssignedToMe ? 'Lead Asignado a Ti' : 'Nuevo Lead en Bandeja',
             description: `${newLead.client_name} • ${newLead.service_type}`,
             link: '/leads',
             created_at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -80,42 +181,12 @@ export default function Header({ onMenuClick, onToggleMenu }: HeaderProps) {
           }
         }
       )
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'internal_messages' },
-        (payload) => {
-          const newMsg = payload.new as { id: string; content: string };
-          const item: NotificationItem = {
-            id: `msg_${Date.now()}`,
-            type: 'message',
-            title: 'Mensaje Interno',
-            description: newMsg.content.slice(0, 50),
-            link: '/messages',
-            created_at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-          };
-
-          setNotifications((prev) => [item, ...prev]);
-
-          if (localStorage.getItem('insta_crm_messages_muted') !== 'true') {
-            playNotificationSound();
-          }
-        }
-      )
       .subscribe();
-
-    // Cerrar el dropdown al hacer clic fuera
-    const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
 
     return () => {
       supabase.removeChannel(channel);
-      document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, []);
+  }, [currentProfile]);
 
   const toggleMute = () => {
     const nextState = !isMuted;
@@ -204,7 +275,7 @@ export default function Header({ onMenuClick, onToggleMenu }: HeaderProps) {
                 {notifications.length === 0 ? (
                   <div className="p-8 text-center text-xs text-slate-400 space-y-1">
                     <p className="font-semibold text-slate-600">Bandeja al día</p>
-                    <p>No tienes alertas pendientes de leads o mensajes.</p>
+                    <p>No tienes alertas pendientes.</p>
                   </div>
                 ) : (
                   notifications.map((item) => (
@@ -240,7 +311,7 @@ export default function Header({ onMenuClick, onToggleMenu }: HeaderProps) {
             {userEmail ? userEmail.charAt(0).toUpperCase() : 'U'}
           </div>
           <span className="text-xs font-medium text-slate-700 hidden sm:inline max-w-[150px] truncate">
-            {userEmail || 'Conectado'}
+            {currentProfile?.full_name || userEmail || 'Conectado'}
           </span>
           <button
             onClick={handleSignOut}
