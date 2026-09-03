@@ -10,6 +10,9 @@ import { calculateScore } from '@/lib/scoring';
 import { playNotificationSound } from '@/lib/audio';
 import { 
   Phone, 
+  PhoneCall,
+  PhoneOff,
+  PhoneForwarded,
   MessageSquare, 
   Plus, 
   MapPin, 
@@ -38,7 +41,6 @@ import {
   DollarSign,
   Gift,
   Sparkles,
-  RefreshCw,
   X
 } from 'lucide-react';
 
@@ -69,10 +71,10 @@ export default function LeadsPage() {
   const [coordinators, setCoordinators] = useState<CoordinatorOption[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Vistas: 'table' | 'kanban' | 'retention' (Fidelización LTV)
+  // Vistas: 'table' | 'kanban' | 'retention'
   const [viewMode, setViewMode] = useState<'table' | 'kanban' | 'retention'>('table');
   
-  // Drag and drop state
+  // Drag and drop
   const [draggedLeadId, setDraggedLeadId] = useState<string | null>(null);
   const [dragOverStage, setDragOverStage] = useState<LeadStatus | null>(null);
 
@@ -84,6 +86,12 @@ export default function LeadsPage() {
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
   const [leadToDelete, setLeadToDelete] = useState<Lead | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Modal Registro Verificado de Llamada (Call Outcome)
+  const [callModalLead, setCallModalLead] = useState<Lead | null>(null);
+  const [callOutcome, setCallOutcome] = useState<'connected' | 'voicemail' | 'no_answer' | 'wrong_number'>('connected');
+  const [callNotes, setCallNotes] = useState('');
+  const [savingCall, setSavingCall] = useState(false);
 
   // Ficha 360° / Drawer lateral
   const [selectedLead360, setSelectedLead360] = useState<Lead | null>(null);
@@ -174,7 +182,83 @@ export default function LeadsPage() {
     };
   }, []);
 
-  // --- CARGA DE DATOS PARA LA FICHA 360° ---
+  // --- INICIAR LLAMADA REAL Y ABRIR REGISTRO ---
+  const handleTriggerCall = (lead: Lead) => {
+    // 1. Disparar el marcador nativo del dispositivo (tel:+...)
+    const cleanNumber = lead.phone.replace(/\D/g, '');
+    window.location.href = `tel:${cleanNumber}`;
+
+    // 2. Abrir el modal de resultado verificado
+    setCallModalLead(lead);
+    setCallOutcome('connected');
+    setCallNotes('');
+  };
+
+  // Guardar resultado de la llamada verificado
+  const handleSaveCallOutcome = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!callModalLead) return;
+
+    setSavingCall(true);
+
+    const isCountableCall = callOutcome === 'connected' || callOutcome === 'voicemail' || callOutcome === 'no_answer';
+    const newCallsCount = isCountableCall && callModalLead.calls_count < 4 
+      ? callModalLead.calls_count + 1 
+      : callModalLead.calls_count;
+
+    let outcomeText = '';
+    switch (callOutcome) {
+      case 'connected':
+        outcomeText = 'Llamada Contestada / Conversación con Cliente';
+        break;
+      case 'voicemail':
+        outcomeText = 'Llamada enviada a Buzón de Voz';
+        break;
+      case 'no_answer':
+        outcomeText = 'Llamada no contestada (Repicó)';
+        break;
+      case 'wrong_number':
+        outcomeText = 'Número equivocado o fuera de servicio';
+        break;
+    }
+
+    // 1. Guardar la nota en la bitácora cronológica
+    const finalNote = `📞 [${outcomeText}]${callNotes ? ` - Detalle: ${callNotes}` : ''}`;
+    await supabase.from('lead_notes').insert([
+      {
+        lead_id: callModalLead.id,
+        author_name: 'Coordinador',
+        note: finalNote,
+      }
+    ]);
+
+    // 2. Actualizar el lead con scoring y contador
+    const { score, temperature } = calculateScore({
+      service_type: callModalLead.service_type,
+      location_county: callModalLead.location_county,
+      budget_range: callModalLead.budget_range,
+      calls_count: newCallsCount,
+      messages_count: callModalLead.messages_count,
+    });
+
+    const updateData = {
+      calls_count: newCallsCount,
+      status: (callModalLead.status === 'nuevo' ? 'en_seguimiento' : callModalLead.status) as LeadStatus,
+      lead_score: score,
+      temperature: temperature,
+    };
+
+    const { error } = await supabase.from('leads').update(updateData).eq('id', callModalLead.id);
+
+    if (!error) {
+      setLeads((prev) => prev.map((l) => (l.id === callModalLead.id ? { ...l, ...updateData } : l)));
+    }
+
+    setSavingCall(false);
+    setCallModalLead(null);
+  };
+
+  // Carga de Ficha 360°
   const handleOpen360 = async (lead: Lead) => {
     setSelectedLead360(lead);
     setLoadingNotes(true);
@@ -187,9 +271,13 @@ export default function LeadsPage() {
     ]);
 
     if (notesData) setLeadNotes(notesData);
-    if (visitsData) setLeadVisits(visitsData);
+    if (visitsData) setLeadVisVisitsData(visitsData);
     if (quotesData) setLeadQuotes(quotesData);
     setLoadingNotes(false);
+  };
+
+  const setLeadVisVisitsData = (data: SiteVisit[]) => {
+    setLeadVisits(data);
   };
 
   const handleAddNote = async (e: React.FormEvent) => {
@@ -217,8 +305,8 @@ export default function LeadsPage() {
     const total = leads.length;
     const hotCount = leads.filter((l) => l.temperature === 'caliente' || (l.lead_score || 0) >= 70).length;
     const protocolDone = leads.filter((l) => l.calls_count >= 4 && l.messages_count >= 4).length;
-    const visitsDone = leads.filter((l) => l.status === 'visita_realizada' || l.status === 'presupuestado' || l.status === 'cerrado_ganado').length;
-    return { total, hotCount, protocolDone, visitsDone };
+    const wonList = leads.filter((l) => l.status === 'cerrado_ganado');
+    return { total, hotCount, protocolDone, wonCount: wonList.length };
   }, [leads]);
 
   // WhatsApp
@@ -260,39 +348,36 @@ export default function LeadsPage() {
     window.open(`https://wa.me/${fullPhoneNumber}?text=${encodeURIComponent(waMessageBody)}`, '_blank');
 
     if (whatsAppLead.messages_count < 4) {
-      await handleIncrementInteraction(whatsAppLead, 'message');
+      const newMessages = whatsAppLead.messages_count + 1;
+      const { score, temperature } = calculateScore({
+        service_type: whatsAppLead.service_type,
+        location_county: whatsAppLead.location_county,
+        budget_range: whatsAppLead.budget_range,
+        calls_count: whatsAppLead.calls_count,
+        messages_count: newMessages,
+      });
+
+      const updateData = {
+        messages_count: newMessages,
+        status: (whatsAppLead.status === 'nuevo' ? 'en_seguimiento' : whatsAppLead.status) as LeadStatus,
+        lead_score: score,
+        temperature: temperature,
+      };
+
+      await supabase.from('leads').update(updateData).eq('id', whatsAppLead.id);
+      
+      // Registrar nota en bitácora
+      await supabase.from('lead_notes').insert([
+        {
+          lead_id: whatsAppLead.id,
+          author_name: 'Coordinador',
+          note: `💬 Mensaje de WhatsApp enviado al cliente (+1 al protocolo 4+4).`,
+        }
+      ]);
+
+      setLeads((prev) => prev.map((l) => (l.id === whatsAppLead.id ? { ...l, ...updateData } : l)));
     }
     setWhatsAppLead(null);
-  };
-
-  // Interacciones 4+4
-  const handleIncrementInteraction = async (lead: Lead, type: 'call' | 'message') => {
-    const newCalls = type === 'call' ? lead.calls_count + 1 : lead.calls_count;
-    const newMessages = type === 'message' ? lead.messages_count + 1 : lead.messages_count;
-
-    if (type === 'call' && lead.calls_count >= 4) return;
-    if (type === 'message' && lead.messages_count >= 4) return;
-
-    const { score, temperature } = calculateScore({
-      service_type: lead.service_type,
-      location_county: lead.location_county,
-      budget_range: lead.budget_range,
-      calls_count: newCalls,
-      messages_count: newMessages,
-    });
-
-    const updateData = {
-      calls_count: newCalls,
-      messages_count: newMessages,
-      status: (lead.status === 'nuevo' ? 'en_seguimiento' : lead.status) as LeadStatus,
-      lead_score: score,
-      temperature: temperature,
-    };
-
-    const { error } = await supabase.from('leads').update(updateData).eq('id', lead.id);
-    if (!error) {
-      setLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, ...updateData } : l)));
-    }
   };
 
   // Mover etapa en Kanban
@@ -303,7 +388,7 @@ export default function LeadsPage() {
     }
   };
 
-  // --- DRAG AND DROP NATIVO PARA EL KANBAN ---
+  // Drag & Drop
   const handleDragStart = (e: React.DragEvent, leadId: string) => {
     setDraggedLeadId(leadId);
     e.dataTransfer.setData('text/plain', leadId);
@@ -313,9 +398,7 @@ export default function LeadsPage() {
   const handleDragOver = (e: React.DragEvent, stageId: LeadStatus) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
-    if (dragOverStage !== stageId) {
-      setDragOverStage(stageId);
-    }
+    if (dragOverStage !== stageId) setDragOverStage(stageId);
   };
 
   const handleDragLeave = () => {
@@ -544,7 +627,6 @@ export default function LeadsPage() {
     });
   }, [leads, searchQuery, filterCounty, filterStatus, filterCoordinator, filterSource]);
 
-  // Leads en etapa "cerrado_ganado" para la vista de Retención & LTV
   const wonClients = useMemo(() => {
     return leads.filter((l) => l.status === 'cerrado_ganado');
   }, [leads]);
@@ -620,12 +702,11 @@ export default function LeadsPage() {
           <div>
             <h2 className="text-xl sm:text-2xl font-bold text-slate-800">Leads & Pipeline</h2>
             <p className="text-xs sm:text-sm text-slate-500">
-              Arrastre inteligente Drag & Drop, Ficha 360°, Scoring y Retención Postventa (LTV)
+              Gestión comercial con registro verificado de llamadas, Ficha 360° y Retención LTV
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {/* Selector de Vistas: Lista, Kanban y Retención LTV */}
             <div className="bg-slate-200/80 p-1 rounded-xl flex items-center gap-1 border border-slate-300">
               <button
                 onClick={() => setViewMode('table')}
@@ -704,12 +785,12 @@ export default function LeadsPage() {
             </div>
             <div>
               <p className="text-[11px] font-bold text-slate-400 uppercase">Obras Ganadas (LTV)</p>
-              <h4 className="text-xl sm:text-2xl font-bold text-emerald-600">{wonClients.length}</h4>
+              <h4 className="text-xl sm:text-2xl font-bold text-emerald-600">{kpis.wonCount}</h4>
             </div>
           </div>
         </div>
 
-        {/* Barra de Filtros (Oculta en vista LTV para simplificar) */}
+        {/* Filtros */}
         {viewMode !== 'retention' && (
           <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-3">
             <div className="flex items-center justify-between">
@@ -904,21 +985,22 @@ export default function LeadsPage() {
 
                         <td className="py-3 px-4 text-right">
                           <div className="flex items-center justify-end gap-1">
+                            {/* Botón WhatsApp */}
                             <button
                               onClick={() => handleOpenWhatsAppModal(lead)}
-                              title="Enviar WhatsApp con prefijo personalizado"
+                              title="Enviar WhatsApp personalizado"
                               className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded transition-colors"
                             >
                               <MessageSquare className="w-4 h-4 fill-emerald-100" />
                             </button>
 
+                            {/* Botón Llamar con Verificación */}
                             <button
-                              onClick={() => handleIncrementInteraction(lead, 'call')}
-                              disabled={lead.calls_count >= 4}
-                              title="Llamada realizada (+1 al protocolo)"
-                              className="p-1.5 text-slate-500 hover:text-blue-600 rounded disabled:opacity-30"
+                              onClick={() => handleTriggerCall(lead)}
+                              title="Llamar al cliente y registrar resultado"
+                              className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded transition-colors"
                             >
-                              <Phone className="w-4 h-4" />
+                              <Phone className="w-4 h-4 fill-blue-100" />
                             </button>
 
                             <button
@@ -947,7 +1029,7 @@ export default function LeadsPage() {
           </div>
         )}
 
-        {/* --- VISTA 2: PIPELINE KANBAN CON DRAG & DROP NATIVO --- */}
+        {/* --- VISTA 2: PIPELINE KANBAN --- */}
         {viewMode === 'kanban' && (
           <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 overflow-x-auto pb-4">
             {KANBAN_STAGES.map((stage) => {
@@ -1018,7 +1100,17 @@ export default function LeadsPage() {
                             </div>
                           </div>
 
-                          <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                          <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-1.5">
+                            {/* Llamada */}
+                            <button
+                              onClick={() => handleTriggerCall(lead)}
+                              className="p-1.5 text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+                              title="Llamar al cliente"
+                            >
+                              <Phone className="w-3.5 h-3.5 fill-blue-100" />
+                            </button>
+
+                            {/* WhatsApp */}
                             <button
                               onClick={() => handleOpenWhatsAppModal(lead)}
                               className="p-1.5 text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors"
@@ -1026,6 +1118,7 @@ export default function LeadsPage() {
                             >
                               <MessageSquare className="w-3.5 h-3.5 fill-emerald-100" />
                             </button>
+
                             <select
                               value={lead.status}
                               onChange={(e) => handleMoveStage(lead.id, e.target.value as LeadStatus)}
@@ -1049,7 +1142,7 @@ export default function LeadsPage() {
           </div>
         )}
 
-        {/* --- VISTA 3: RETENCIÓN, FIDELIZACIÓN & LTV (POSTVENTA) --- */}
+        {/* --- VISTA 3: RETENCIÓN & LTV --- */}
         {viewMode === 'retention' && (
           <div className="space-y-4">
             <div className="bg-emerald-900 text-white p-5 rounded-2xl shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -1059,8 +1152,7 @@ export default function LeadsPage() {
                   Hub de Retención & LTV (Customer Lifetime Value)
                 </h3>
                 <p className="text-xs text-emerald-100 mt-1 max-w-2xl">
-                  Los clientes que ya contrataron obras contigo son tu activo de mayor rentabilidad. 
-                  Usa estos disparadores automáticos de WhatsApp para mantenimiento preventivo y promociones de temporada.
+                  Dispara campañas de fidelización para clientes de obras ganadas. Mantenimiento y nuevos contratos.
                 </p>
               </div>
               <div className="text-right">
@@ -1074,7 +1166,7 @@ export default function LeadsPage() {
                 <Sparkles className="w-8 h-8 text-amber-500 mx-auto" />
                 <h4 className="font-bold text-slate-800">Aún no hay clientes en etapa Cerrado Ganado</h4>
                 <p className="text-xs text-slate-500 max-w-md mx-auto">
-                  Arrastra o mueve un lead a la columna <strong>"Ganados (Obras)"</strong> en el Pipeline cuando se firme el contrato para activar sus campañas de retención aquí.
+                  Arrastra o mueve un lead a la columna <strong>"Ganados (Obras)"</strong> en el Pipeline para activar sus campañas de retención.
                 </p>
               </div>
             ) : (
@@ -1106,13 +1198,11 @@ export default function LeadsPage() {
                       </div>
                     </div>
 
-                    {/* Disparadores de Campañas LTV */}
                     <div className="space-y-2 pt-2 border-t border-slate-100">
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                         Campañas de Reactivación WhatsApp
                       </span>
 
-                      {/* Plantilla 1: Mantenimiento Preventivo (6 meses) */}
                       <button
                         onClick={() =>
                           handleOpenWhatsAppModal(
@@ -1129,7 +1219,6 @@ export default function LeadsPage() {
                         <Send className="w-3.5 h-3.5 text-emerald-600 group-hover:translate-x-0.5 transition-transform" />
                       </button>
 
-                      {/* Plantilla 2: Nueva Obra con Descuento */}
                       <button
                         onClick={() =>
                           handleOpenWhatsAppModal(
@@ -1154,7 +1243,133 @@ export default function LeadsPage() {
         )}
       </div>
 
-      {/* FICHA 360°: DRAWER LATERAL */}
+      {/* --- MODAL REGISTRO VERIFICADO DE LLAMADA (CALL OUTCOME) --- */}
+      {callModalLead && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-blue-50/60">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-blue-600 text-white rounded-xl shadow-xs">
+                  <PhoneCall className="w-4 h-4 animate-pulse" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-800 text-sm">Registrar Resultado de Llamada</h3>
+                  <p className="text-xs text-slate-500">{callModalLead.client_name} • {callModalLead.phone}</p>
+                </div>
+              </div>
+              <button onClick={() => setCallModalLead(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveCallOutcome} className="p-6 space-y-4 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 uppercase mb-2">
+                  ¿Qué sucedió en la llamada? *
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setCallOutcome('connected')}
+                    className={`p-3 rounded-xl border text-left flex flex-col gap-1 transition-all ${
+                      callOutcome === 'connected'
+                        ? 'border-emerald-500 bg-emerald-50 text-emerald-900 ring-2 ring-emerald-200 font-bold'
+                        : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Contestó</span>
+                    </div>
+                    <span className="text-[10px] text-slate-500 font-normal">Hablamos con el cliente</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setCallOutcome('voicemail')}
+                    className={`p-3 rounded-xl border text-left flex flex-col gap-1 transition-all ${
+                      callOutcome === 'voicemail'
+                        ? 'border-amber-500 bg-amber-50 text-amber-900 ring-2 ring-amber-200 font-bold'
+                        : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <PhoneForwarded className="w-3.5 h-3.5 text-amber-600" />
+                      <span>Buzón de Voz</span>
+                    </div>
+                    <span className="text-[10px] text-slate-500 font-normal">Dejé recado de voz</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setCallOutcome('no_answer')}
+                    className={`p-3 rounded-xl border text-left flex flex-col gap-1 transition-all ${
+                      callOutcome === 'no_answer'
+                        ? 'border-blue-500 bg-blue-50 text-blue-900 ring-2 ring-blue-200 font-bold'
+                        : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <PhoneOff className="w-3.5 h-3.5 text-blue-600" />
+                      <span>No Contestó</span>
+                    </div>
+                    <span className="text-[10px] text-slate-500 font-normal">Repicó sin respuesta</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setCallOutcome('wrong_number')}
+                    className={`p-3 rounded-xl border text-left flex flex-col gap-1 transition-all ${
+                      callOutcome === 'wrong_number'
+                        ? 'border-rose-500 bg-rose-50 text-rose-900 ring-2 ring-rose-200 font-bold'
+                        : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                      <span>Equivocado</span>
+                    </div>
+                    <span className="text-[10px] text-slate-500 font-normal">Número inválido</span>
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 uppercase mb-1">
+                  Notas de la Llamada / Acuerdos (Opcional)
+                </label>
+                <textarea
+                  rows={3}
+                  value={callNotes}
+                  onChange={(e) => setCallNotes(e.target.value)}
+                  placeholder="Ej. Interesado en cambiar baldosas, llamar después de las 5 PM..."
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:outline-none focus:border-blue-500 text-xs"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2.5 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setCallModalLead(null)}
+                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 font-semibold"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingCall}
+                  className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-md shadow-blue-600/20 flex items-center gap-1.5 transition-colors"
+                >
+                  <CheckCheck className="w-3.5 h-3.5" />
+                  <span>{savingCall ? 'Guardando...' : 'Confirmar & Registrar'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* --- FICHA 360°: DRAWER LATERAL --- */}
       {selectedLead360 && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex justify-end animate-in fade-in duration-200">
           <div className="bg-white w-full max-w-xl h-full shadow-2xl flex flex-col border-l border-slate-200 animate-in slide-in-from-right duration-300">
@@ -1273,7 +1488,7 @@ export default function LeadsPage() {
               <div className="space-y-3 pt-2">
                 <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
                   <Clock className="w-3.5 h-3.5 text-blue-600" />
-                  Bitácora Cronológica & Notas del Asesor
+                  Bitácora Cronológica & Registro de Llamadas
                 </h4>
 
                 <form onSubmit={handleAddNote} className="space-y-2">
@@ -1321,6 +1536,17 @@ export default function LeadsPage() {
                 onClick={() => {
                   const target = selectedLead360;
                   setSelectedLead360(null);
+                  handleTriggerCall(target);
+                }}
+                className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold flex items-center justify-center gap-1.5 shadow-xs transition-colors"
+              >
+                <Phone className="w-3.5 h-3.5" />
+                <span>Llamar</span>
+              </button>
+              <button
+                onClick={() => {
+                  const target = selectedLead360;
+                  setSelectedLead360(null);
                   handleOpenWhatsAppModal(target);
                 }}
                 className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold flex items-center justify-center gap-1.5 shadow-xs transition-colors"
@@ -1328,23 +1554,12 @@ export default function LeadsPage() {
                 <MessageSquare className="w-3.5 h-3.5" />
                 <span>WhatsApp</span>
               </button>
-              <button
-                onClick={() => {
-                  const target = selectedLead360;
-                  setSelectedLead360(null);
-                  handleOpenQuickVisit(target);
-                }}
-                className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold flex items-center justify-center gap-1.5 shadow-xs transition-colors"
-              >
-                <CalendarPlus className="w-3.5 h-3.5" />
-                <span>Visita GPS</span>
-              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* MODAL WHATSAPP DINÁMICO */}
+      {/* --- MODAL WHATSAPP --- */}
       {whatsAppLead && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200">
@@ -1422,7 +1637,7 @@ export default function LeadsPage() {
         </div>
       )}
 
-      {/* MODAL VISITA EXPRESS (GPS) */}
+      {/* --- MODAL VISITA EXPRESS (GPS) --- */}
       {quickVisitLead && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-200">
@@ -1530,7 +1745,7 @@ export default function LeadsPage() {
         </div>
       )}
 
-      {/* MODAL CREAR LEAD */}
+      {/* --- MODAL CREAR LEAD --- */}
       {isCreateModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-lg overflow-hidden border border-slate-200">
@@ -1701,7 +1916,7 @@ export default function LeadsPage() {
         </div>
       )}
 
-      {/* MODAL EDITAR LEAD */}
+      {/* --- MODAL EDITAR LEAD --- */}
       {editingLead && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-lg overflow-hidden border border-slate-200">
@@ -1799,7 +2014,7 @@ export default function LeadsPage() {
         </div>
       )}
 
-      {/* CONFIRMAR ELIMINACIÓN */}
+      {/* --- CONFIRMAR ELIMINACIÓN --- */}
       <ConfirmModal
         isOpen={Boolean(leadToDelete)}
         title="¿Eliminar este prospecto?"
