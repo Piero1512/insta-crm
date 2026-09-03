@@ -8,16 +8,18 @@ import {
   Send, 
   Users, 
   MessageSquare, 
-  Volume2,
-  VolumeX,
-  Check,
-  CheckCheck
+  Volume2, 
+  VolumeX, 
+  Check, 
+  CheckCheck,
+  ShieldCheck
 } from 'lucide-react';
 
 interface Profile {
   id: string;
   full_name: string;
   role: string;
+  email?: string;
   phone?: string;
 }
 
@@ -31,7 +33,7 @@ interface InternalMessage {
   created_at: string;
 }
 
-// Generador de sonido nativo infalible (Web Audio API - no requiere archivos .mp3)
+// Generador de sonido infalible (Web Audio API)
 function playBeep() {
   try {
     const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -41,8 +43,8 @@ function playBeep() {
     const gain = ctx.createGain();
 
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(587.33, ctx.currentTime); // Tono D5
-    osc.frequency.setValueAtTime(880, ctx.currentTime + 0.1); // Tono A5
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+    osc.frequency.setValueAtTime(880, ctx.currentTime + 0.1);
 
     gain.gain.setValueAtTime(0.2, ctx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
@@ -53,25 +55,24 @@ function playBeep() {
     osc.start();
     osc.stop(ctx.currentTime + 0.35);
   } catch {
-    // Si el navegador bloquea el contexto de audio antes de la interacción
+    // Silenciado o bloqueado por el navegador
   }
 }
 
 export default function MessagesPage() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [currentUserId, setCurrentUserId] = useState<string>('');
+  const [currentUser, setCurrentUser] = useState<Profile | null>(null);
   const [selectedRecipientId, setSelectedRecipientId] = useState<string>('team'); // 'team' = Canal general
   const [messages, setMessages] = useState<InternalMessage[]>([]);
   const [inputMessage, setInputMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
 
-  // Mute guardado en LocalStorage
+  // Control de silencio
   const [isMuted, setIsMuted] = useState(false);
-
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Solicitar permiso de notificaciones
+  // Permiso de notificaciones de escritorio
   const requestNotificationPermission = async () => {
     if ('Notification' in window && Notification.permission === 'default') {
       await Notification.requestPermission();
@@ -92,21 +93,27 @@ export default function MessagesPage() {
     localStorage.setItem('insta_crm_messages_muted', String(nextState));
   };
 
-  // Cargar perfiles y mensajes iniciales
-  const loadInitialData = async () => {
+  // 1. Cargar Perfil Autenticado de forma 100% privada
+  const loadAuthAndProfiles = async () => {
     setLoading(true);
+
+    const { data: { user } } = await supabase.auth.getUser();
     const { data: teamProfiles } = await supabase
       .from('profiles')
-      .select('id, full_name, role, phone')
+      .select('*')
       .order('full_name', { ascending: true });
 
     if (teamProfiles && teamProfiles.length > 0) {
       setProfiles(teamProfiles);
-      if (!currentUserId) {
-        // Cargar usuario guardado o el primero
-        const savedUser = localStorage.getItem('insta_crm_active_profile');
-        const match = teamProfiles.find(p => p.id === savedUser);
-        setCurrentUserId(match ? match.id : teamProfiles[0].id);
+
+      if (user) {
+        // Buscar perfil vinculado por ID de auth o por email
+        const matched = teamProfiles.find(
+          (p) => p.id === user.id || (p.email && p.email.toLowerCase() === user.email?.toLowerCase())
+        );
+        setCurrentUser(matched || teamProfiles[0]);
+      } else {
+        setCurrentUser(teamProfiles[0]);
       }
     }
 
@@ -118,44 +125,48 @@ export default function MessagesPage() {
     if (msgList) {
       setMessages(msgList);
     }
+
     setLoading(false);
   };
 
-  const handleSwitchUser = (newId: string) => {
-    setCurrentUserId(newId);
-    localStorage.setItem('insta_crm_active_profile', newId);
-  };
-
-  // Marcar como leídos los mensajes dirigidos al usuario actual
   useEffect(() => {
-    if (!currentUserId) return;
+    loadAuthAndProfiles();
+  }, []);
+
+  // 2. Marcar mensajes recibidos como leídos automáticamente
+  useEffect(() => {
+    if (!currentUser) return;
 
     const markAsRead = async () => {
-      // Si estamos en un chat directo con alguien, marcar los mensajes de ese remitente como leídos
       if (selectedRecipientId !== 'team') {
-        const unread = messages.filter(
-          m => m.sender_id === selectedRecipientId && m.receiver_id === currentUserId && !m.is_read
-        );
+        const unreadIds = messages
+          .filter(
+            (m) => m.sender_id === selectedRecipientId && m.receiver_id === currentUser.id && !m.is_read
+          )
+          .map((m) => m.id);
 
-        if (unread.length > 0) {
-          const ids = unread.map(u => u.id);
-          await supabase.from('internal_messages').update({ is_read: true }).in('id', ids);
-          setMessages(prev =>
-            prev.map(m => (ids.includes(m.id) ? { ...m, is_read: true } : m))
+        if (unreadIds.length > 0) {
+          await supabase
+            .from('internal_messages')
+            .update({ is_read: true })
+            .in('id', unreadIds);
+
+          setMessages((prev) =>
+            prev.map((m) => (unreadIds.includes(m.id) ? { ...m, is_read: true } : m))
           );
         }
       }
     };
 
     markAsRead();
-  }, [selectedRecipientId, currentUserId, messages]);
+  }, [selectedRecipientId, currentUser, messages]);
 
-  // Suscripción en Tiempo Real
+  // 3. Suscripción en Tiempo Real
   useEffect(() => {
-    loadInitialData();
+    if (!currentUser) return;
 
     const channel = supabase
-      .channel('public:internal_messages_v2')
+      .channel('public:internal_messages_realtime')
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'internal_messages' },
@@ -163,20 +174,19 @@ export default function MessagesPage() {
           const newMsg = payload.new as InternalMessage;
 
           setMessages((prev) => {
-            if (prev.some(m => m.id === newMsg.id)) return prev;
+            if (prev.some((m) => m.id === newMsg.id)) return prev;
             return [...prev, newMsg];
           });
 
-          // Reproducir sonido y notificación si el mensaje NO lo envié yo
-          const isFromMe = newMsg.sender_id === currentUserId;
+          // Notificar solo si el remitente NO soy yo
+          const isFromMe = newMsg.sender_id === currentUser.id;
           const isMutedNow = localStorage.getItem('insta_crm_messages_muted') === 'true';
 
           if (!isFromMe && !isMutedNow) {
             playBeep();
 
-            // Notificación nativa de escritorio
             if ('Notification' in window && Notification.permission === 'granted') {
-              const sender = profiles.find(p => p.id === newMsg.sender_id);
+              const sender = profiles.find((p) => p.id === newMsg.sender_id);
               const senderName = sender?.full_name || 'Compañero';
               const n = new Notification(`Mensaje de ${senderName}`, {
                 body: newMsg.content.slice(0, 100),
@@ -192,7 +202,7 @@ export default function MessagesPage() {
         { event: 'UPDATE', schema: 'public', table: 'internal_messages' },
         (payload) => {
           const updated = payload.new as InternalMessage;
-          setMessages((prev) => prev.map(m => (m.id === updated.id ? updated : m)));
+          setMessages((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
         }
       )
       .subscribe();
@@ -200,36 +210,38 @@ export default function MessagesPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [currentUserId, profiles]);
+  }, [currentUser, profiles]);
 
   // Auto-scroll
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, selectedRecipientId]);
 
-  // Conversación filtrada
+  // Filtrado de conversación
   const activeConversation = useMemo(() => {
+    if (!currentUser) return [];
+
     if (selectedRecipientId === 'team') {
       return messages.filter((m) => m.receiver_id === null);
     }
     return messages.filter(
       (m) =>
-        (m.sender_id === currentUserId && m.receiver_id === selectedRecipientId) ||
-        (m.sender_id === selectedRecipientId && m.receiver_id === currentUserId)
+        (m.sender_id === currentUser.id && m.receiver_id === selectedRecipientId) ||
+        (m.sender_id === selectedRecipientId && m.receiver_id === currentUser.id)
     );
-  }, [messages, selectedRecipientId, currentUserId]);
+  }, [messages, selectedRecipientId, currentUser]);
 
-  // Enviar mensaje
+  // Enviar mensaje autenticado
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputMessage.trim() || !currentUserId) return;
+    if (!inputMessage.trim() || !currentUser) return;
 
     setSending(true);
     const receiver = selectedRecipientId === 'team' ? null : selectedRecipientId;
 
     const { error } = await supabase.from('internal_messages').insert([
       {
-        sender_id: currentUserId,
+        sender_id: currentUser.id,
         receiver_id: receiver,
         content: inputMessage.trim(),
         is_read: false,
@@ -244,17 +256,16 @@ export default function MessagesPage() {
     setSending(false);
   };
 
-  // Helper para obtener datos del remitente
-  const getSenderProfile = (senderId: string) => {
-    return profiles.find((p) => p.id === senderId);
-  };
-
   const currentRecipient = profiles.find((p) => p.id === selectedRecipientId);
+  const otherMembers = useMemo(() => {
+    if (!currentUser) return profiles;
+    return profiles.filter((p) => p.id !== currentUser.id);
+  }, [profiles, currentUser]);
 
   return (
     <AppLayout>
       <div className="space-y-4 max-w-6xl mx-auto">
-        {/* Barra superior */}
+        {/* Barra superior de Mensajería */}
         <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
@@ -262,28 +273,22 @@ export default function MessagesPage() {
               Mensajería Interna del Equipo
             </h2>
             <p className="text-xs text-slate-500">
-              Coordinación en tiempo real con confirmación de lectura (doble chulo)
+              Canal de coordinación privado con confirmación de lectura en tiempo real
             </p>
           </div>
 
           <div className="flex items-center gap-3">
-            {/* Selector de identidad: Define quién envía los mensajes */}
-            <div className="flex items-center gap-1.5 text-xs bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 shadow-2xs">
-              <span className="text-slate-400 font-semibold">Tú eres:</span>
-              <select
-                value={currentUserId}
-                onChange={(e) => handleSwitchUser(e.target.value)}
-                className="font-bold text-slate-800 bg-transparent focus:outline-none cursor-pointer"
-              >
-                {profiles.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.full_name} ({p.role})
-                  </option>
-                ))}
-              </select>
+            {/* Badge de Identidad Privada (No editable) */}
+            <div className="flex items-center gap-2 text-xs bg-slate-50 px-3.5 py-1.5 rounded-xl border border-slate-200 shadow-2xs">
+              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+              <span className="text-slate-400 font-medium">Sesión activa:</span>
+              <span className="font-bold text-slate-800">
+                {currentUser ? `${currentUser.full_name} (${currentUser.role || 'Usuario'})` : 'Cargando...'}
+              </span>
+              <ShieldCheck className="w-3.5 h-3.5 text-blue-600 ml-0.5" title="Perfil autenticado y protegido" />
             </div>
 
-            {/* Silenciar/Activar Notificaciones */}
+            {/* Silenciar/Activar Sonido */}
             <button
               onClick={toggleMute}
               className={`px-3 py-1.5 rounded-xl flex items-center gap-1.5 text-xs font-bold border transition-all ${
@@ -331,49 +336,47 @@ export default function MessagesPage() {
 
               <div className="pt-3 pb-1 px-3">
                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                  Miembros ({profiles.filter((p) => p.id !== currentUserId).length})
+                  Compañeros ({otherMembers.length})
                 </span>
               </div>
 
-              {profiles
-                .filter((p) => p.id !== currentUserId)
-                .map((member) => {
-                  const isSelected = selectedRecipientId === member.id;
-                  
-                  // Mensajes no leídos de este miembro
-                  const unreadCount = messages.filter(
-                    m => m.sender_id === member.id && m.receiver_id === currentUserId && !m.is_read
-                  ).length;
+              {/* Lista de Miembros */}
+              {otherMembers.map((member) => {
+                const isSelected = selectedRecipientId === member.id;
+                
+                const unreadCount = currentUser ? messages.filter(
+                  (m) => m.sender_id === member.id && m.receiver_id === currentUser.id && !m.is_read
+                ).length : 0;
 
-                  return (
-                    <button
-                      key={member.id}
-                      onClick={() => setSelectedRecipientId(member.id)}
-                      className={`w-full text-left p-2.5 rounded-xl flex items-center gap-2.5 transition-all ${
-                        isSelected
-                          ? 'bg-blue-600 text-white shadow-sm'
-                          : 'hover:bg-slate-100 text-slate-700'
-                      }`}
-                    >
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${
-                        isSelected ? 'bg-white text-blue-600' : 'bg-slate-200 text-slate-700'
-                      }`}>
-                        {member.full_name.charAt(0).toUpperCase()}
+                return (
+                  <button
+                    key={member.id}
+                    onClick={() => setSelectedRecipientId(member.id)}
+                    className={`w-full text-left p-2.5 rounded-xl flex items-center gap-2.5 transition-all ${
+                      isSelected
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'hover:bg-slate-100 text-slate-700'
+                    }`}
+                  >
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${
+                      isSelected ? 'bg-white text-blue-600' : 'bg-slate-200 text-slate-700'
+                    }`}>
+                      {member.full_name.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-bold text-xs truncate">{member.full_name}</div>
+                      <div className={`text-[10px] truncate ${isSelected ? 'text-blue-100' : 'text-slate-400'}`}>
+                        {member.role || 'Coordinador'}
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-bold text-xs truncate">{member.full_name}</div>
-                        <div className={`text-[10px] truncate ${isSelected ? 'text-blue-100' : 'text-slate-400'}`}>
-                          {member.role}
-                        </div>
-                      </div>
-                      {unreadCount > 0 && (
-                        <span className="px-1.5 py-0.5 bg-rose-500 text-white rounded-full text-[10px] font-bold">
-                          {unreadCount}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
+                    </div>
+                    {unreadCount > 0 && (
+                      <span className="px-2 py-0.5 bg-rose-500 text-white rounded-full text-[10px] font-bold shadow-xs">
+                        {unreadCount}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -390,7 +393,7 @@ export default function MessagesPage() {
                     {selectedRecipientId === 'team' ? 'Canal General de Operaciones' : currentRecipient?.full_name}
                   </h3>
                   <span className="text-[10px] text-slate-500">
-                    {selectedRecipientId === 'team' ? 'Visible para todo el personal' : currentRecipient?.role}
+                    {selectedRecipientId === 'team' ? 'Visible para todo el personal' : currentRecipient?.role || 'Miembro del equipo'}
                   </span>
                 </div>
               </div>
@@ -406,8 +409,8 @@ export default function MessagesPage() {
                 </div>
               ) : (
                 activeConversation.map((msg) => {
-                  const isMine = msg.sender_id === currentUserId;
-                  const sender = getSenderProfile(msg.sender_id);
+                  const isMine = currentUser && msg.sender_id === currentUser.id;
+                  const sender = profiles.find((p) => p.id === msg.sender_id);
                   const senderName = isMine ? 'Tú' : (sender?.full_name || 'Compañero');
 
                   return (
@@ -425,26 +428,29 @@ export default function MessagesPage() {
                       </div>
 
                       <div
-                        className={`p-3 rounded-2xl max-w-sm sm:max-w-md text-xs leading-relaxed shadow-2xs flex flex-col gap-1 ${
+                        className={`p-3 rounded-2xl max-w-sm sm:max-w-md text-xs leading-relaxed shadow-2xs flex flex-col ${
                           isMine
                             ? 'bg-blue-600 text-white rounded-tr-none'
                             : 'bg-white border border-slate-200 text-slate-800 rounded-tl-none'
                         }`}
                       >
-                        <p>{msg.content}</p>
+                        <p className="whitespace-pre-wrap break-words">{msg.content}</p>
 
-                        {/* Indicador de chulos (ticks) solo en mensajes propios */}
+                        {/* CHULOS DE CONFIRMACIÓN */}
                         {isMine && (
-                          <div className="self-end flex items-center text-[10px] mt-0.5">
+                          <div className="flex items-center justify-end gap-1 mt-1 pt-0.5 border-t border-blue-500/40 text-[10px]">
                             {msg.receiver_id === null ? (
-                              // Canal general
-                              <Check className="w-3.5 h-3.5 text-blue-200" title="Enviado al canal" />
+                              <span className="text-[10px] text-blue-200">Enviado al canal</span>
                             ) : msg.is_read ? (
-                              // Dos chulos azules (Leído)
-                              <CheckCheck className="w-3.5 h-3.5 text-sky-300" title="Leído por el destinatario" />
+                              <div className="flex items-center gap-0.5 text-sky-200 font-bold" title="Leído por el destinatario">
+                                <span>Leído</span>
+                                <CheckCheck className="w-3.5 h-3.5 text-sky-300 stroke-[2.5]" />
+                              </div>
                             ) : (
-                              // Un chulo gris/blanco (Enviado)
-                              <Check className="w-3.5 h-3.5 text-blue-200" title="Enviado (sin leer)" />
+                              <div className="flex items-center gap-0.5 text-blue-200" title="Entregado en el servidor">
+                                <span>Entregado</span>
+                                <Check className="w-3.5 h-3.5 text-blue-200 stroke-[2]" />
+                              </div>
                             )}
                           </div>
                         )}
