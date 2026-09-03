@@ -41,6 +41,7 @@ import {
   DollarSign,
   Gift,
   Sparkles,
+  MessageCircle,
   X
 } from 'lucide-react';
 
@@ -93,6 +94,18 @@ export default function LeadsPage() {
   const [callNotes, setCallNotes] = useState('');
   const [savingCall, setSavingCall] = useState(false);
 
+  // Modal Envío WhatsApp
+  const [whatsAppLead, setWhatsAppLead] = useState<Lead | null>(null);
+  const [waCountryPrefix, setWaCountryPrefix] = useState('+1');
+  const [waCustomPhone, setWaCustomPhone] = useState('');
+  const [waMessageBody, setWaMessageBody] = useState('');
+
+  // Modal Verificación WhatsApp (Message Outcome)
+  const [waConfirmLead, setWaConfirmLead] = useState<Lead | null>(null);
+  const [waOutcome, setWaOutcome] = useState<'sent' | 'replied' | 'failed'>('sent');
+  const [waNotes, setWaNotes] = useState('');
+  const [savingWaOutcome, setSavingWaOutcome] = useState(false);
+
   // Ficha 360° / Drawer lateral
   const [selectedLead360, setSelectedLead360] = useState<Lead | null>(null);
   const [leadNotes, setLeadNotes] = useState<LeadNote[]>([]);
@@ -100,12 +113,6 @@ export default function LeadsPage() {
   const [loadingNotes, setLoadingNotes] = useState(false);
   const [leadVisits, setLeadVisits] = useState<SiteVisit[]>([]);
   const [leadQuotes, setLeadQuotes] = useState<Quote[]>([]);
-
-  // Modal WhatsApp
-  const [whatsAppLead, setWhatsAppLead] = useState<Lead | null>(null);
-  const [waCountryPrefix, setWaCountryPrefix] = useState('+1');
-  const [waCustomPhone, setWaCustomPhone] = useState('');
-  const [waMessageBody, setWaMessageBody] = useState('');
 
   // Modal Visita Express
   const [quickVisitLead, setQuickVisitLead] = useState<Lead | null>(null);
@@ -182,19 +189,15 @@ export default function LeadsPage() {
     };
   }, []);
 
-  // --- INICIAR LLAMADA REAL Y ABRIR REGISTRO ---
+  // --- LLAMADA VERIFICADA ---
   const handleTriggerCall = (lead: Lead) => {
-    // 1. Disparar el marcador nativo del dispositivo (tel:+...)
     const cleanNumber = lead.phone.replace(/\D/g, '');
     window.location.href = `tel:${cleanNumber}`;
-
-    // 2. Abrir el modal de resultado verificado
     setCallModalLead(lead);
     setCallOutcome('connected');
     setCallNotes('');
   };
 
-  // Guardar resultado de la llamada verificado
   const handleSaveCallOutcome = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!callModalLead) return;
@@ -208,21 +211,12 @@ export default function LeadsPage() {
 
     let outcomeText = '';
     switch (callOutcome) {
-      case 'connected':
-        outcomeText = 'Llamada Contestada / Conversación con Cliente';
-        break;
-      case 'voicemail':
-        outcomeText = 'Llamada enviada a Buzón de Voz';
-        break;
-      case 'no_answer':
-        outcomeText = 'Llamada no contestada (Repicó)';
-        break;
-      case 'wrong_number':
-        outcomeText = 'Número equivocado o fuera de servicio';
-        break;
+      case 'connected': outcomeText = 'Llamada Contestada / Conversación'; break;
+      case 'voicemail': outcomeText = 'Llamada a Buzón de Voz'; break;
+      case 'no_answer': outcomeText = 'Llamada no contestada'; break;
+      case 'wrong_number': outcomeText = 'Número equivocado o inválido'; break;
     }
 
-    // 1. Guardar la nota en la bitácora cronológica
     const finalNote = `📞 [${outcomeText}]${callNotes ? ` - Detalle: ${callNotes}` : ''}`;
     await supabase.from('lead_notes').insert([
       {
@@ -232,7 +226,6 @@ export default function LeadsPage() {
       }
     ]);
 
-    // 2. Actualizar el lead con scoring y contador
     const { score, temperature } = calculateScore({
       service_type: callModalLead.service_type,
       location_county: callModalLead.location_county,
@@ -249,13 +242,115 @@ export default function LeadsPage() {
     };
 
     const { error } = await supabase.from('leads').update(updateData).eq('id', callModalLead.id);
-
     if (!error) {
       setLeads((prev) => prev.map((l) => (l.id === callModalLead.id ? { ...l, ...updateData } : l)));
     }
 
     setSavingCall(false);
     setCallModalLead(null);
+  };
+
+  // --- WHATSAPP: PASO 1 (ABRIR CHAT) ---
+  const handleOpenWhatsAppModal = (lead: Lead, customMessage?: string) => {
+    setWhatsAppLead(lead);
+    const raw = lead.phone.trim();
+    if (raw.startsWith('+57')) {
+      setWaCountryPrefix('+57');
+      setWaCustomPhone(raw.replace('+57', '').trim());
+    } else if (raw.startsWith('+52')) {
+      setWaCountryPrefix('+52');
+      setWaCustomPhone(raw.replace('+52', '').trim());
+    } else if (raw.startsWith('+34')) {
+      setWaCountryPrefix('+34');
+      setWaCustomPhone(raw.replace('+34', '').trim());
+    } else if (raw.startsWith('+1')) {
+      setWaCountryPrefix('+1');
+      setWaCustomPhone(raw.replace('+1', '').trim());
+    } else {
+      setWaCountryPrefix('+1');
+      setWaCustomPhone(raw);
+    }
+
+    if (customMessage) {
+      setWaMessageBody(customMessage);
+    } else {
+      setWaMessageBody(
+        `Hola ${lead.client_name}, le saludamos de Insta CRM Florida Contractors. Recibimos su solicitud para ${lead.service_type}. ¿A qué hora le resultaría conveniente coordinar una breve llamada o visita técnica a su propiedad?`
+      );
+    }
+  };
+
+  const handleLaunchWhatsApp = () => {
+    if (!whatsAppLead) return;
+    const cleanNumber = waCustomPhone.replace(/\D/g, '');
+    const cleanPrefix = waCountryPrefix.replace(/\D/g, '');
+    const fullPhoneNumber = cleanPrefix ? `${cleanPrefix}${cleanNumber}` : cleanNumber;
+
+    // 1. Abrir WhatsApp Web o App
+    window.open(`https://wa.me/${fullPhoneNumber}?text=${encodeURIComponent(waMessageBody)}`, '_blank');
+
+    // 2. Abrir Modal de Confirmación Verificada y cerrar modal de redacción
+    const currentLead = whatsAppLead;
+    setWhatsAppLead(null);
+    setWaConfirmLead(currentLead);
+    setWaOutcome('sent');
+    setWaNotes('');
+  };
+
+  // --- WHATSAPP: PASO 2 (CONFIRMAR RESULTADO) ---
+  const handleSaveWaOutcome = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!waConfirmLead) return;
+
+    setSavingWaOutcome(true);
+
+    const isCountable = waOutcome === 'sent' || waOutcome === 'replied';
+    const newMessagesCount = isCountable && waConfirmLead.messages_count < 4
+      ? waConfirmLead.messages_count + 1
+      : waConfirmLead.messages_count;
+
+    let outcomeText = '';
+    switch (waOutcome) {
+      case 'sent': outcomeText = 'Mensaje de WhatsApp Enviado y Entregado'; break;
+      case 'replied': outcomeText = 'Conversación Activa / Cliente Respondió'; break;
+      case 'failed': outcomeText = 'No se envió / Número sin WhatsApp'; break;
+    }
+
+    // 1. Guardar en bitácora de notas
+    const finalNote = `💬 [WhatsApp: ${outcomeText}]${waNotes ? ` - Detalle: ${waNotes}` : ''}`;
+    await supabase.from('lead_notes').insert([
+      {
+        lead_id: waConfirmLead.id,
+        author_name: 'Coordinador',
+        note: finalNote,
+      }
+    ]);
+
+    // 2. Si se envió o respondió, actualizar contador y score
+    if (isCountable) {
+      const { score, temperature } = calculateScore({
+        service_type: waConfirmLead.service_type,
+        location_county: waConfirmLead.location_county,
+        budget_range: waConfirmLead.budget_range,
+        calls_count: waConfirmLead.calls_count,
+        messages_count: newMessagesCount,
+      });
+
+      const updateData = {
+        messages_count: newMessagesCount,
+        status: (waConfirmLead.status === 'nuevo' ? 'en_seguimiento' : waConfirmLead.status) as LeadStatus,
+        lead_score: score,
+        temperature: waOutcome === 'replied' ? ('caliente' as LeadTemperature) : temperature,
+      };
+
+      const { error } = await supabase.from('leads').update(updateData).eq('id', waConfirmLead.id);
+      if (!error) {
+        setLeads((prev) => prev.map((l) => (l.id === waConfirmLead.id ? { ...l, ...updateData } : l)));
+      }
+    }
+
+    setSavingWaOutcome(false);
+    setWaConfirmLead(null);
   };
 
   // Carga de Ficha 360°
@@ -271,13 +366,9 @@ export default function LeadsPage() {
     ]);
 
     if (notesData) setLeadNotes(notesData);
-    if (visitsData) setLeadVisVisitsData(visitsData);
+    if (visitsData) setLeadVisits(visitsData);
     if (quotesData) setLeadQuotes(quotesData);
     setLoadingNotes(false);
-  };
-
-  const setLeadVisVisitsData = (data: SiteVisit[]) => {
-    setLeadVisits(data);
   };
 
   const handleAddNote = async (e: React.FormEvent) => {
@@ -308,77 +399,6 @@ export default function LeadsPage() {
     const wonList = leads.filter((l) => l.status === 'cerrado_ganado');
     return { total, hotCount, protocolDone, wonCount: wonList.length };
   }, [leads]);
-
-  // WhatsApp
-  const handleOpenWhatsAppModal = (lead: Lead, customMessage?: string) => {
-    setWhatsAppLead(lead);
-    const raw = lead.phone.trim();
-    if (raw.startsWith('+57')) {
-      setWaCountryPrefix('+57');
-      setWaCustomPhone(raw.replace('+57', '').trim());
-    } else if (raw.startsWith('+52')) {
-      setWaCountryPrefix('+52');
-      setWaCustomPhone(raw.replace('+52', '').trim());
-    } else if (raw.startsWith('+34')) {
-      setWaCountryPrefix('+34');
-      setWaCustomPhone(raw.replace('+34', '').trim());
-    } else if (raw.startsWith('+1')) {
-      setWaCountryPrefix('+1');
-      setWaCustomPhone(raw.replace('+1', '').trim());
-    } else {
-      setWaCountryPrefix('+1');
-      setWaCustomPhone(raw);
-    }
-
-    if (customMessage) {
-      setWaMessageBody(customMessage);
-    } else {
-      setWaMessageBody(
-        `Hola ${lead.client_name}, le saludamos de Insta CRM Florida Contractors. Recibimos su solicitud para ${lead.service_type}. ¿A qué hora le resultaría conveniente coordinar una breve llamada o visita técnica a su propiedad?`
-      );
-    }
-  };
-
-  const handleSendWhatsApp = async () => {
-    if (!whatsAppLead) return;
-    const cleanNumber = waCustomPhone.replace(/\D/g, '');
-    const cleanPrefix = waCountryPrefix.replace(/\D/g, '');
-    const fullPhoneNumber = cleanPrefix ? `${cleanPrefix}${cleanNumber}` : cleanNumber;
-
-    window.open(`https://wa.me/${fullPhoneNumber}?text=${encodeURIComponent(waMessageBody)}`, '_blank');
-
-    if (whatsAppLead.messages_count < 4) {
-      const newMessages = whatsAppLead.messages_count + 1;
-      const { score, temperature } = calculateScore({
-        service_type: whatsAppLead.service_type,
-        location_county: whatsAppLead.location_county,
-        budget_range: whatsAppLead.budget_range,
-        calls_count: whatsAppLead.calls_count,
-        messages_count: newMessages,
-      });
-
-      const updateData = {
-        messages_count: newMessages,
-        status: (whatsAppLead.status === 'nuevo' ? 'en_seguimiento' : whatsAppLead.status) as LeadStatus,
-        lead_score: score,
-        temperature: temperature,
-      };
-
-      await supabase.from('leads').update(updateData).eq('id', whatsAppLead.id);
-      
-      // Registrar nota en bitácora
-      await supabase.from('lead_notes').insert([
-        {
-          lead_id: whatsAppLead.id,
-          author_name: 'Coordinador',
-          note: `💬 Mensaje de WhatsApp enviado al cliente (+1 al protocolo 4+4).`,
-        }
-      ]);
-
-      setLeads((prev) => prev.map((l) => (l.id === whatsAppLead.id ? { ...l, ...updateData } : l)));
-    }
-    setWhatsAppLead(null);
-  };
 
   // Mover etapa en Kanban
   const handleMoveStage = async (leadId: string, newStatus: LeadStatus) => {
@@ -702,7 +722,7 @@ export default function LeadsPage() {
           <div>
             <h2 className="text-xl sm:text-2xl font-bold text-slate-800">Leads & Pipeline</h2>
             <p className="text-xs sm:text-sm text-slate-500">
-              Gestión comercial con registro verificado de llamadas, Ficha 360° y Retención LTV
+              Gestión comercial con registro verificado de llamadas y WhatsApp, Ficha 360° y Retención LTV
             </p>
           </div>
 
@@ -985,10 +1005,10 @@ export default function LeadsPage() {
 
                         <td className="py-3 px-4 text-right">
                           <div className="flex items-center justify-end gap-1">
-                            {/* Botón WhatsApp */}
+                            {/* Botón WhatsApp con Verificación */}
                             <button
                               onClick={() => handleOpenWhatsAppModal(lead)}
-                              title="Enviar WhatsApp personalizado"
+                              title="Enviar WhatsApp con confirmación de entrega"
                               className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded transition-colors"
                             >
                               <MessageSquare className="w-4 h-4 fill-emerald-100" />
@@ -1101,7 +1121,6 @@ export default function LeadsPage() {
                           </div>
 
                           <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-1.5">
-                            {/* Llamada */}
                             <button
                               onClick={() => handleTriggerCall(lead)}
                               className="p-1.5 text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
@@ -1110,7 +1129,6 @@ export default function LeadsPage() {
                               <Phone className="w-3.5 h-3.5 fill-blue-100" />
                             </button>
 
-                            {/* WhatsApp */}
                             <button
                               onClick={() => handleOpenWhatsAppModal(lead)}
                               className="p-1.5 text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors"
@@ -1242,6 +1260,185 @@ export default function LeadsPage() {
           </div>
         )}
       </div>
+
+      {/* --- MODAL 1: REDACTAR Y ABRIR WHATSAPP --- */}
+      {whatsAppLead && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-emerald-50/60">
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
+                <h3 className="font-bold text-slate-800 text-sm sm:text-base">
+                  Preparar WhatsApp para {whatsAppLead.client_name}
+                </h3>
+              </div>
+              <button onClick={() => setWhatsAppLead(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 uppercase mb-1.5">
+                  Prefijo de País & Número Celular
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <select
+                    value={waCountryPrefix}
+                    onChange={(e) => setWaCountryPrefix(e.target.value)}
+                    className="px-2.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 text-xs focus:outline-none"
+                  >
+                    <option value="+1">🇺🇸 +1 (USA/FL)</option>
+                    <option value="+57">🇨🇴 +57 (Colombia)</option>
+                    <option value="+52">🇲🇽 +52 (México)</option>
+                    <option value="+34">🇪🇸 +34 (España)</option>
+                    <option value="+58">🇻🇪 +58 (Venezuela)</option>
+                    <option value="">Otro / Sin prefijo</option>
+                  </select>
+                  <input
+                    type="text"
+                    value={waCustomPhone}
+                    onChange={(e) => setWaCustomPhone(e.target.value)}
+                    placeholder="Número telefónico"
+                    className="sm:col-span-2 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-semibold focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 uppercase mb-1.5">
+                  Mensaje Personalizado
+                </label>
+                <textarea
+                  rows={4}
+                  value={waMessageBody}
+                  onChange={(e) => setWaMessageBody(e.target.value)}
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:outline-none focus:border-emerald-500 leading-relaxed text-xs"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2.5 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setWhatsAppLead(null)}
+                  className="px-4 py-2.5 rounded-xl text-slate-600 hover:bg-slate-100 font-semibold text-xs"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleLaunchWhatsApp}
+                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold shadow-md shadow-emerald-600/20 flex items-center gap-2 text-xs transition-colors"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>Abrir WhatsApp Web / App</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODAL 2: CONFIRMACIÓN Y REGISTRO VERIFICADO DE WHATSAPP --- */}
+      {waConfirmLead && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-emerald-50/70">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-emerald-600 text-white rounded-xl shadow-xs">
+                  <MessageCircle className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-800 text-sm">Confirmar Envío de WhatsApp</h3>
+                  <p className="text-xs text-slate-500">{waConfirmLead.client_name} • {waConfirmLead.phone}</p>
+                </div>
+              </div>
+              <button onClick={() => setWaConfirmLead(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveWaOutcome} className="p-6 space-y-4 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 uppercase mb-2">
+                  ¿Se entregó el mensaje en WhatsApp? *
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setWaOutcome('sent')}
+                    className={`p-3 rounded-xl border text-center flex flex-col items-center gap-1 transition-all ${
+                      waOutcome === 'sent'
+                        ? 'border-emerald-500 bg-emerald-50 text-emerald-900 ring-2 ring-emerald-200 font-bold'
+                        : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    <span>Enviado (+1)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setWaOutcome('replied')}
+                    className={`p-3 rounded-xl border text-center flex flex-col items-center gap-1 transition-all ${
+                      waOutcome === 'replied'
+                        ? 'border-blue-500 bg-blue-50 text-blue-900 ring-2 ring-blue-200 font-bold'
+                        : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    <Flame className="w-4 h-4 text-amber-500" />
+                    <span>Respondió (+1)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setWaOutcome('failed')}
+                    className={`p-3 rounded-xl border text-center flex flex-col items-center gap-1 transition-all ${
+                      waOutcome === 'failed'
+                        ? 'border-rose-500 bg-rose-50 text-rose-900 ring-2 ring-rose-200 font-bold'
+                        : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    <AlertCircle className="w-4 h-4 text-rose-600" />
+                    <span>Falló / Cancelado</span>
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 uppercase mb-1">
+                  Resumen o Comentarios de la Conversación (Opcional)
+                </label>
+                <textarea
+                  rows={3}
+                  value={waNotes}
+                  onChange={(e) => setWaNotes(e.target.value)}
+                  placeholder="Ej. Cliente leyó el mensaje y pidió presupuesto por PDF..."
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:outline-none focus:border-emerald-500 text-xs"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2.5 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setWaConfirmLead(null)}
+                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 font-semibold"
+                >
+                  Omitir Registro
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingWaOutcome}
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold shadow-md shadow-emerald-600/20 flex items-center gap-1.5 transition-colors"
+                >
+                  <CheckCheck className="w-3.5 h-3.5" />
+                  <span>{savingWaOutcome ? 'Guardando...' : 'Confirmar & Registrar'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* --- MODAL REGISTRO VERIFICADO DE LLAMADA (CALL OUTCOME) --- */}
       {callModalLead && (
@@ -1488,7 +1685,7 @@ export default function LeadsPage() {
               <div className="space-y-3 pt-2">
                 <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
                   <Clock className="w-3.5 h-3.5 text-blue-600" />
-                  Bitácora Cronológica & Registro de Llamadas
+                  Bitácora Cronológica & Historial Multicanal
                 </h4>
 
                 <form onSubmit={handleAddNote} className="space-y-2">
@@ -1554,84 +1751,6 @@ export default function LeadsPage() {
                 <MessageSquare className="w-3.5 h-3.5" />
                 <span>WhatsApp</span>
               </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* --- MODAL WHATSAPP --- */}
-      {whatsAppLead && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-emerald-50/60">
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
-                <h3 className="font-bold text-slate-800 text-sm sm:text-base">
-                  Enviar WhatsApp a {whatsAppLead.client_name}
-                </h3>
-              </div>
-              <button onClick={() => setWhatsAppLead(null)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-6 space-y-4 text-xs">
-              <div>
-                <label className="block font-bold text-slate-700 uppercase mb-1.5">
-                  Prefijo de País & Número Celular
-                </label>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  <select
-                    value={waCountryPrefix}
-                    onChange={(e) => setWaCountryPrefix(e.target.value)}
-                    className="px-2.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 text-xs focus:outline-none"
-                  >
-                    <option value="+1">🇺🇸 +1 (USA/FL)</option>
-                    <option value="+57">🇨🇴 +57 (Colombia)</option>
-                    <option value="+52">🇲🇽 +52 (México)</option>
-                    <option value="+34">🇪🇸 +34 (España)</option>
-                    <option value="+58">🇻🇪 +58 (Venezuela)</option>
-                    <option value="">Otro / Sin prefijo</option>
-                  </select>
-                  <input
-                    type="text"
-                    value={waCustomPhone}
-                    onChange={(e) => setWaCustomPhone(e.target.value)}
-                    placeholder="Número telefónico"
-                    className="sm:col-span-2 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-semibold focus:outline-none focus:border-emerald-500"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 uppercase mb-1.5">
-                  Mensaje Personalizado
-                </label>
-                <textarea
-                  rows={4}
-                  value={waMessageBody}
-                  onChange={(e) => setWaMessageBody(e.target.value)}
-                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:outline-none focus:border-emerald-500 leading-relaxed text-xs"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2.5 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setWhatsAppLead(null)}
-                  className="px-4 py-2.5 rounded-xl text-slate-600 hover:bg-slate-100 font-semibold text-xs"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSendWhatsApp}
-                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold shadow-md shadow-emerald-600/20 flex items-center gap-2 text-xs transition-colors"
-                >
-                  <Send className="w-3.5 h-3.5" />
-                  <span>Abrir WhatsApp (+1 msj)</span>
-                </button>
-              </div>
             </div>
           </div>
         </div>
