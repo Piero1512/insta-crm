@@ -1,13 +1,13 @@
 // app/api/whatsapp/send/route.ts
 import { NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabase';
+import { supabaseAdmin } from '@/lib/supabaseAdmin';
 
 export async function POST(req: Request) {
   try {
     const { leadId, phone, countryCode, messageText, coordinatorName } = await req.json();
 
     if (!phone || !messageText) {
-      return NextResponse.json({ error: 'Teléfono y mensaje son obligatorios' }, { status: 400 });
+      return NextResponse.json({ error: 'Teléfono y mensaje requeridos' }, { status: 400 });
     }
 
     const rawDigits = phone.replace(/\D/g, '');
@@ -23,11 +23,12 @@ export async function POST(req: Request) {
 
     if (!phoneNumberId || !accessToken) {
       return NextResponse.json(
-        { error: 'Credenciales de WhatsApp no configuradas en el servidor' },
+        { error: 'Credenciales de Meta no configuradas' },
         { status: 500 }
       );
     }
 
+    // 1. Envío a Meta Cloud API
     let payloadBody: Record<string, unknown> = {
       messaging_product: 'whatsapp',
       to: cleanPhone,
@@ -49,7 +50,7 @@ export async function POST(req: Request) {
 
     let metaData = await metaResponse.json();
 
-    // Fallback a plantilla si la ventana de 24h está cerrada
+    // Fallback de plantilla oficial si la ventana de 24h está cerrada
     if (!metaResponse.ok && (metaData.error?.code === 131047 || metaData.error?.code === 131005)) {
       payloadBody = {
         messaging_product: 'whatsapp',
@@ -78,37 +79,41 @@ export async function POST(req: Request) {
 
     if (!metaResponse.ok) {
       const detail = metaData.error?.message || 'Error al procesar con Meta';
-      const code = metaData.error?.code ? `(#${metaData.error.code}) ` : '';
-      return NextResponse.json(
-        { error: `${code}${detail}` },
-        { status: metaResponse.status }
-      );
+      return NextResponse.json({ error: detail }, { status: metaResponse.status });
     }
 
-    // Guardar en la tabla con las columnas correctas: 'note' y 'author_name'
+    // 2. Persistencia en Supabase mediante supabaseAdmin (Garantiza que el contador quede guardado)
     if (leadId) {
-      await supabase.from('lead_notes').insert([
+      // Registrar la nota
+      await supabaseAdmin.from('lead_notes').insert([
         {
           lead_id: leadId,
-          author_name: coordinatorName || 'Coordinador',
+          author_name: coordinatorName || 'Jean Epalza',
           note: `💬 [WhatsApp Oficial Enviado a +${cleanPhone}]: "${messageText}"`,
         },
       ]);
 
-      const { data: lead } = await supabase
+      // Consultar contador actual
+      const { data: lead } = await supabaseAdmin
         .from('leads')
         .select('whatsapp_count')
         .eq('id', leadId)
         .single();
 
-      const currentCount = lead?.whatsapp_count ?? 0;
-      await supabase
+      const nextCount = (lead?.whatsapp_count ?? 0) + 1;
+
+      // Actualización definitiva en base de datos
+      const { error: updateError } = await supabaseAdmin
         .from('leads')
         .update({
-          whatsapp_count: currentCount + 1,
+          whatsapp_count: nextCount,
           last_contact: new Date().toISOString(),
         })
         .eq('id', leadId);
+
+      if (updateError) {
+        console.error('Error actualizando contador en Supabase:', updateError);
+      }
     }
 
     return NextResponse.json({ success: true, metaData, targetPhone: cleanPhone });
