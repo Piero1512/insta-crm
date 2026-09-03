@@ -5,7 +5,7 @@ import { useState, useEffect, useMemo } from 'react';
 import AppLayout from '@/components/AppLayout';
 import ConfirmModal from '@/components/ConfirmModal';
 import { supabase } from '@/lib/supabase';
-import { Lead, County, LeadSource, LeadTemperature, LeadStatus } from '@/types/crm';
+import { Lead, County, LeadSource, LeadTemperature, LeadStatus, SiteVisit, Quote } from '@/types/crm';
 import { calculateScore } from '@/lib/scoring';
 import { playNotificationSound } from '@/lib/audio';
 import { 
@@ -32,6 +32,10 @@ import {
   Users,
   CheckCheck,
   TrendingUp,
+  FileText,
+  Clock,
+  ExternalLink,
+  DollarSign,
   X
 } from 'lucide-react';
 
@@ -39,6 +43,14 @@ interface CoordinatorOption {
   id: string;
   full_name: string;
   role: string;
+}
+
+interface LeadNote {
+  id: string;
+  lead_id: string;
+  author_name: string;
+  note: string;
+  created_at: string;
 }
 
 const KANBAN_STAGES: { id: LeadStatus; label: string; color: string; border: string }[] = [
@@ -60,11 +72,19 @@ export default function LeadsPage() {
   // Alerta Realtime
   const [newLeadBanner, setNewLeadBanner] = useState<string | null>(null);
 
-  // Modales
+  // Modales generales
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
   const [leadToDelete, setLeadToDelete] = useState<Lead | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Ficha 360° / Drawer lateral
+  const [selectedLead360, setSelectedLead360] = useState<Lead | null>(null);
+  const [leadNotes, setLeadNotes] = useState<LeadNote[]>([]);
+  const [newNoteText, setNewNoteText] = useState('');
+  const [loadingNotes, setLoadingNotes] = useState(false);
+  const [leadVisits, setLeadVisits] = useState<SiteVisit[]>([]);
+  const [leadQuotes, setLeadQuotes] = useState<Quote[]>([]);
 
   // Modal WhatsApp
   const [whatsAppLead, setWhatsAppLead] = useState<Lead | null>(null);
@@ -89,7 +109,7 @@ export default function LeadsPage() {
   const [filterCoordinator, setFilterCoordinator] = useState<string>('all');
   const [filterSource, setFilterSource] = useState<string>('all');
 
-  // Formulario Crear
+  // Formulario Crear Lead
   const [clientName, setClientName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
@@ -101,7 +121,7 @@ export default function LeadsPage() {
   const [leadSource, setLeadSource] = useState<LeadSource>('meta_ads');
   const [budgetRange, setBudgetRange] = useState<string>('5k-15k');
 
-  // Formulario Editar
+  // Formulario Editar Lead
   const [editClientName, setEditClientName] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editEmail, setEditEmail] = useState('');
@@ -147,7 +167,45 @@ export default function LeadsPage() {
     };
   }, []);
 
-  // --- KPIs CALCULADOS PARA LAS TARJETAS SUPERIORES ---
+  // --- CARGA DE DATOS PARA LA FICHA 360° ---
+  const handleOpen360 = async (lead: Lead) => {
+    setSelectedLead360(lead);
+    setLoadingNotes(true);
+    setNewNoteText('');
+
+    const [{ data: notesData }, { data: visitsData }, { data: quotesData }] = await Promise.all([
+      supabase.from('lead_notes').select('*').eq('lead_id', lead.id).order('created_at', { ascending: false }),
+      supabase.from('site_visits').select('*').eq('lead_id', lead.id).order('visited_at', { ascending: false }),
+      supabase.from('quotes').select('*').eq('lead_id', lead.id).order('created_at', { ascending: false }),
+    ]);
+
+    if (notesData) setLeadNotes(notesData);
+    if (visitsData) setLeadVisits(visitsData);
+    if (quotesData) setLeadQuotes(quotesData);
+    setLoadingNotes(false);
+  };
+
+  const handleAddNote = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedLead360 || !newNoteText.trim()) return;
+
+    const { data, error } = await supabase.from('lead_notes').insert([
+      {
+        lead_id: selectedLead360.id,
+        author_name: 'Coordinador',
+        note: newNoteText.trim(),
+      }
+    ]).select().single();
+
+    if (!error && data) {
+      setLeadNotes((prev) => [data, ...prev]);
+      setNewNoteText('');
+    } else if (error) {
+      alert('Error al guardar nota: ' + error.message);
+    }
+  };
+
+  // KPIs superiores
   const kpis = useMemo(() => {
     const total = leads.length;
     const hotCount = leads.filter((l) => l.temperature === 'caliente' || (l.lead_score || 0) >= 70).length;
@@ -178,7 +236,7 @@ export default function LeadsPage() {
     }
 
     setWaMessageBody(
-      `Hola ${lead.client_name}, le saludamos de Insta CRM Florida Contractors. Recibimos su solicitud para ${lead.service_type}. ¿A qué hora le resultaría conveniente que coordinemos una breve llamada o visita técnica a su propiedad?`
+      `Hola ${lead.client_name}, le saludamos de Insta CRM Florida Contractors. Recibimos su solicitud para ${lead.service_type}. ¿A qué hora le resultaría conveniente coordinar una breve llamada o visita técnica a su propiedad?`
     );
   };
 
@@ -517,7 +575,7 @@ export default function LeadsPage() {
           <div>
             <h2 className="text-xl sm:text-2xl font-bold text-slate-800">Leads & Prospectos</h2>
             <p className="text-xs sm:text-sm text-slate-500">
-              Calificación predictiva (Lead Scoring), atribución multicanal y protocolo 4+4
+              Ficha 360°, bitácora de notas, calificación predictiva y protocolo 4+4
             </p>
           </div>
 
@@ -554,7 +612,7 @@ export default function LeadsPage() {
           </div>
         </div>
 
-        {/* 4 RECUADROS MÉTRICOS SUPERIORES (RESTAURADOS) */}
+        {/* 4 RECUADROS MÉTRICOS SUPERIORES */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
           <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center gap-3.5">
             <div className="p-2.5 bg-blue-50 text-blue-600 rounded-xl">
@@ -686,9 +744,8 @@ export default function LeadsPage() {
           </div>
         </div>
 
-        {/* RENDER SEGÚN MODO: TABLA O KANBAN */}
+        {/* MODO TABLA O KANBAN */}
         {viewMode === 'table' ? (
-          /* VISTA 1: TABLA */
           <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
             <div className="p-4 sm:p-6 border-b border-slate-100 flex items-center justify-between">
               <h3 className="font-bold text-slate-800 text-sm sm:text-base">Bandeja Inteligente de Leads</h3>
@@ -727,12 +784,22 @@ export default function LeadsPage() {
                     filteredLeads.map((lead) => (
                       <tr key={lead.id} className="hover:bg-slate-50/80 transition-colors">
                         <td className="py-3 px-4">
-                          <div className="font-semibold text-slate-800">{lead.client_name}</div>
-                          <div className="text-xs text-slate-500 flex items-center gap-1.5 mt-0.5">
-                            <span>{lead.service_type}</span>
-                            <span>•</span>
-                            <span className="font-medium text-slate-700">{lead.phone}</span>
-                          </div>
+                          {/* Clic en el nombre para abrir Ficha 360° */}
+                          <button
+                            onClick={() => handleOpen360(lead)}
+                            className="text-left group focus:outline-none"
+                            title="Ver Ficha 360° del Prospecto"
+                          >
+                            <div className="font-bold text-slate-800 group-hover:text-blue-600 transition-colors flex items-center gap-1.5">
+                              <span>{lead.client_name}</span>
+                              <ExternalLink className="w-3 h-3 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+                            </div>
+                            <div className="text-xs text-slate-500 flex items-center gap-1.5 mt-0.5">
+                              <span>{lead.service_type}</span>
+                              <span>•</span>
+                              <span className="font-medium text-slate-700">{lead.phone}</span>
+                            </div>
+                          </button>
                         </td>
 
                         <td className="py-3 px-4">
@@ -824,14 +891,13 @@ export default function LeadsPage() {
             </div>
           </div>
         ) : (
-          /* VISTA 2: PIPELINE KANBAN INTERACTIVO ESTILO SALESFORCE */
+          /* MODO KANBAN */
           <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 overflow-x-auto pb-4">
             {KANBAN_STAGES.map((stage) => {
               const stageLeads = filteredLeads.filter((l) => l.status === stage.id);
 
               return (
                 <div key={stage.id} className="bg-slate-100/80 rounded-2xl p-3 border border-slate-200 flex flex-col min-w-[260px]">
-                  {/* Cabecera de Etapa */}
                   <div className="flex items-center justify-between pb-3 border-b border-slate-200/80 mb-3">
                     <span className={`text-xs font-bold px-2.5 py-1 rounded-lg border ${stage.color} ${stage.border}`}>
                       {stage.label}
@@ -841,7 +907,6 @@ export default function LeadsPage() {
                     </span>
                   </div>
 
-                  {/* Tarjetas de Prospectos en la Etapa */}
                   <div className="space-y-3 flex-1 overflow-y-auto max-h-[600px] pr-1">
                     {stageLeads.length === 0 ? (
                       <div className="text-center py-6 text-xs text-slate-400 border-2 border-dashed border-slate-200 rounded-xl">
@@ -854,10 +919,16 @@ export default function LeadsPage() {
                           className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs hover:shadow-md transition-shadow space-y-2.5"
                         >
                           <div className="flex items-start justify-between gap-1">
-                            <div>
-                              <h4 className="font-bold text-slate-800 text-xs sm:text-sm">{lead.client_name}</h4>
+                            <button
+                              onClick={() => handleOpen360(lead)}
+                              className="text-left group focus:outline-none"
+                              title="Ver Ficha 360°"
+                            >
+                              <h4 className="font-bold text-slate-800 text-xs sm:text-sm group-hover:text-blue-600 transition-colors">
+                                {lead.client_name}
+                              </h4>
                               <p className="text-[11px] text-slate-500 font-medium">{lead.service_type}</p>
-                            </div>
+                            </button>
                             {getTemperatureBadge(lead.temperature, lead.lead_score)}
                           </div>
 
@@ -869,7 +940,6 @@ export default function LeadsPage() {
                             <span className="font-semibold text-slate-700">{lead.phone}</span>
                           </div>
 
-                          {/* Protocolo 4+4 compacto */}
                           <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-100">
                             <span className="text-slate-400 font-medium">4+4:</span>
                             <div className="flex gap-1.5 font-bold">
@@ -878,7 +948,6 @@ export default function LeadsPage() {
                             </div>
                           </div>
 
-                          {/* Selector rápido para mover de etapa */}
                           <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
                             <button
                               onClick={() => handleOpenWhatsAppModal(lead)}
@@ -911,9 +980,208 @@ export default function LeadsPage() {
         )}
       </div>
 
+      {/* FICHA 360°: DRAWER LATERAL */}
+      {selectedLead360 && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex justify-end animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-xl h-full shadow-2xl flex flex-col border-l border-slate-200 animate-in slide-in-from-right duration-300">
+            {/* Cabecera del Drawer */}
+            <div className="p-5 border-b border-slate-200 bg-slate-50 flex items-start justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-bold text-slate-800 text-lg">{selectedLead360.client_name}</h3>
+                  {getTemperatureBadge(selectedLead360.temperature, selectedLead360.lead_score)}
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {selectedLead360.service_type} • Creado el {new Date(selectedLead360.created_at).toLocaleDateString()}
+                </p>
+              </div>
+              <button
+                onClick={() => setSelectedLead360(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200/60"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Contenido desplazable */}
+            <div className="flex-1 overflow-y-auto p-5 space-y-6 text-xs">
+              {/* Información General */}
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
+                <span className="font-bold text-slate-700 uppercase tracking-wider text-[10px]">
+                  Datos de Contacto & Proyecto
+                </span>
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <div>
+                    <span className="text-slate-400">Teléfono:</span>
+                    <p className="font-bold text-slate-800">{selectedLead360.phone}</p>
+                  </div>
+                  <div>
+                    <span className="text-slate-400">Correo:</span>
+                    <p className="font-bold text-slate-800">{selectedLead360.email || 'No registrado'}</p>
+                  </div>
+                  <div>
+                    <span className="text-slate-400">Ubicación:</span>
+                    <p className="font-bold text-slate-800 capitalize">
+                      {selectedLead360.location_county} {selectedLead360.zip_code ? `(${selectedLead360.zip_code})` : ''}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-slate-400">Presupuesto estimado:</span>
+                    <p className="font-bold text-slate-800">{selectedLead360.budget_range || 'No indicado'}</p>
+                  </div>
+                </div>
+                {selectedLead360.address && (
+                  <div className="pt-2 border-t border-slate-200/60">
+                    <span className="text-slate-400">Dirección:</span>
+                    <p className="font-medium text-slate-800">{selectedLead360.address}</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Historial de Inspecciones Técnicas */}
+              <div>
+                <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[11px] flex items-center gap-1.5 mb-2.5">
+                  <Navigation className="w-3.5 h-3.5 text-indigo-600" />
+                  Inspecciones en Sitio ({leadVisits.length})
+                </h4>
+
+                {leadVisits.length === 0 ? (
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-400 text-center">
+                    No se han registrado visitas para este prospecto.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {leadVisits.map((v) => (
+                      <div key={v.id} className="p-3 bg-indigo-50/40 border border-indigo-100 rounded-xl space-y-2">
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="font-bold text-indigo-900">
+                            GPS: {v.latitude.toFixed(4)}, {v.longitude.toFixed(4)}
+                          </span>
+                          <span className="text-slate-500">{new Date(v.visited_at).toLocaleDateString()}</span>
+                        </div>
+                        <p className="text-slate-700 font-medium">{v.evaluation_notes}</p>
+                        {v.photos && v.photos.length > 0 && (
+                          <div className="flex gap-2 overflow-x-auto pt-1">
+                            {v.photos.map((url, i) => (
+                              <a key={i} href={url} target="_blank" rel="noopener noreferrer">
+                                <img src={url} alt="Evidencia" className="w-16 h-16 object-cover rounded-lg border border-slate-200 shadow-2xs hover:opacity-90" />
+                              </a>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Presupuestos / Cotizaciones Asociadas */}
+              <div>
+                <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[11px] flex items-center gap-1.5 mb-2.5">
+                  <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                  Cotizaciones Emitidas ({leadQuotes.length})
+                </h4>
+
+                {leadQuotes.length === 0 ? (
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-400 text-center">
+                    Sin presupuestos generados todavía.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {leadQuotes.map((q) => (
+                      <div key={q.id} className="p-3 bg-emerald-50/40 border border-emerald-100 rounded-xl flex items-center justify-between">
+                        <div>
+                          <p className="font-bold text-slate-800">Total: ${q.total_amount.toLocaleString()}</p>
+                          <span className="text-[10px] text-slate-500 capitalize">Estado: {q.status}</span>
+                        </div>
+                        <span className="text-[10px] text-slate-400">{new Date(q.created_at).toLocaleDateString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Bitácora de Notas y Seguimiento Comercial */}
+              <div className="space-y-3 pt-2">
+                <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-blue-600" />
+                  Bitácora Cronológica & Notas del Asesor
+                </h4>
+
+                {/* Formulario Agregar Nota */}
+                <form onSubmit={handleAddNote} className="space-y-2">
+                  <textarea
+                    rows={2}
+                    value={newNoteText}
+                    onChange={(e) => setNewNoteText(e.target.value)}
+                    placeholder="Escribe una nota rápida de seguimiento (ej. cliente solicitó cambio de fecha)..."
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 text-xs focus:outline-none focus:border-blue-500"
+                  />
+                  <div className="flex justify-end">
+                    <button
+                      type="submit"
+                      disabled={!newNoteText.trim()}
+                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold rounded-lg transition-colors flex items-center gap-1.5 shadow-2xs text-xs"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>Guardar Nota</span>
+                    </button>
+                  </div>
+                </form>
+
+                {/* Lista de Notas */}
+                <div className="space-y-2.5 pt-2">
+                  {loadingNotes ? (
+                    <p className="text-slate-400 text-center py-2">Cargando historial...</p>
+                  ) : leadNotes.length === 0 ? (
+                    <p className="text-slate-400 text-center py-2">Sin anotaciones previas en la bitácora.</p>
+                  ) : (
+                    leadNotes.map((note) => (
+                      <div key={note.id} className="p-3 bg-white border border-slate-200 rounded-xl shadow-2xs space-y-1">
+                        <div className="flex items-center justify-between text-[10px] text-slate-400">
+                          <span className="font-bold text-slate-700">{note.author_name}</span>
+                          <span>{new Date(note.created_at).toLocaleString()}</span>
+                        </div>
+                        <p className="text-slate-700 font-medium text-xs leading-relaxed">{note.note}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Pie del Drawer con Acciones Rápidas */}
+            <div className="p-4 border-t border-slate-200 bg-slate-50 flex items-center justify-between gap-2">
+              <button
+                onClick={() => {
+                  const target = selectedLead360;
+                  setSelectedLead360(null);
+                  handleOpenWhatsAppModal(target);
+                }}
+                className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold flex items-center justify-center gap-1.5 shadow-xs transition-colors"
+              >
+                <MessageSquare className="w-3.5 h-3.5" />
+                <span>WhatsApp</span>
+              </button>
+              <button
+                onClick={() => {
+                  const target = selectedLead360;
+                  setSelectedLead360(null);
+                  handleOpenQuickVisit(target);
+                }}
+                className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold flex items-center justify-center gap-1.5 shadow-xs transition-colors"
+              >
+                <CalendarPlus className="w-3.5 h-3.5" />
+                <span>Visita GPS</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MODAL WHATSAPP DINÁMICO */}
       {whatsAppLead && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200">
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-emerald-50/60">
               <div className="flex items-center gap-2">
@@ -991,7 +1259,7 @@ export default function LeadsPage() {
 
       {/* MODAL VISITA EXPRESS (GPS) */}
       {quickVisitLead && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-200">
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50">
               <div>
@@ -1099,7 +1367,7 @@ export default function LeadsPage() {
 
       {/* MODAL CREAR LEAD */}
       {isCreateModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-lg overflow-hidden border border-slate-200">
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
               <h3 className="font-bold text-slate-800">Registrar Nuevo Lead</h3>
@@ -1270,7 +1538,7 @@ export default function LeadsPage() {
 
       {/* MODAL EDITAR LEAD */}
       {editingLead && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-lg overflow-hidden border border-slate-200">
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
               <h3 className="font-bold text-slate-800 flex items-center gap-2">
@@ -1289,7 +1557,7 @@ export default function LeadsPage() {
                   required
                   value={editClientName}
                   onChange={(e) => setEditClientName(e.target.value)}
-                  className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none text-slate-800"
+                  className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800"
                 />
               </div>
 
@@ -1301,7 +1569,7 @@ export default function LeadsPage() {
                     required
                     value={editPhone}
                     onChange={(e) => setEditPhone(e.target.value)}
-                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none text-slate-800"
+                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800"
                   />
                 </div>
                 <div>
@@ -1310,7 +1578,7 @@ export default function LeadsPage() {
                     type="email"
                     value={editEmail}
                     onChange={(e) => setEditEmail(e.target.value)}
-                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none text-slate-800"
+                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800"
                   />
                 </div>
               </div>
