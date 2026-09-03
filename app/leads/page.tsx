@@ -107,7 +107,6 @@ export default function LeadsPage() {
   const openWhatsAppModal = (lead: Lead) => {
     setActiveWhatsAppLead(lead);
     setWaStatusFeedback(null);
-    const coordinatorName = currentProfile?.full_name || 'nuestro equipo';
     setCustomMessage(
       `Hola ${lead.client_name}, te saludamos de Insta Contractors Florida. Nos ponemos en contacto contigo respecto a tu solicitud de ${lead.service_type}. ¿En qué horario te resultaría conveniente coordinar una breve visita técnica?`
     );
@@ -142,11 +141,11 @@ export default function LeadsPage() {
           text: 'Mensaje oficial enviado con éxito a través de Meta API. Se actualizó la bitácora del lead.',
         });
 
-        // Actualizar el contador en la vista local inmediatamente
+        // Actualizar el contador local inmediatamente de forma segura
         setLeads((prev) =>
           prev.map((l) =>
             l.id === activeWhatsAppLead.id
-              ? { ...l, whatsapp_count: (l.whatsapp_count || 0) + 1, last_contact: new Date().toISOString() }
+              ? { ...l, whatsapp_count: (l.whatsapp_count ?? 0) + 1, last_contact: new Date().toISOString() }
               : l
           )
         );
@@ -344,16 +343,16 @@ export default function LeadsPage() {
                         </div>
                       </td>
 
-                      {/* Contador oficial 4+4 */}
+                      {/* Contador 4+4 */}
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-2">
                           <span className="flex items-center gap-1 text-[11px] font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md">
-                            <Phone className="w-3 h-3 text-emerald-600" /> {lead.calls_count || 0}/4
+                            <Phone className="w-3 h-3 text-emerald-600" /> {lead.calls_count ?? 0}/4
                           </span>
                           <span className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-md ${
-                            (lead.whatsapp_count || 0) >= 4 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-700'
+                            (lead.whatsapp_count ?? 0) >= 4 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-700'
                           }`}>
-                            <MessageSquare className="w-3 h-3 text-sky-600" /> {lead.whatsapp_count || 0}/4
+                            <MessageSquare className="w-3 h-3 text-sky-600" /> {lead.whatsapp_count ?? 0}/4
                           </span>
                         </div>
                       </td>
@@ -467,7 +466,7 @@ export default function LeadsPage() {
               <div className="bg-sky-50/60 p-3 rounded-xl border border-sky-100 text-[11px] text-sky-800 space-y-1">
                 <p className="font-semibold">Auditoría Automática Activa:</p>
                 <p className="text-slate-600">
-                  Este mensaje se transmitirá por la cuenta comercial de Meta. Al enviarse, el CRM sumará automáticamente el contador a <strong>{activeWhatsAppLead.whatsapp_count + 1}/4</strong> y registrará la copia exacta en la bitácora del lead.
+                  Este mensaje se transmitirá por la cuenta comercial de Meta. Al enviarse, el CRM sumará automáticamente el contador a <strong>{((activeWhatsAppLead.whatsapp_count ?? 0) + 1)}/4</strong> y registrará la copia exacta en la bitácora del lead.
                 </p>
               </div>
 
