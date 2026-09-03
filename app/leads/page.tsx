@@ -17,7 +17,9 @@ import {
   Send,
   X,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  FileText,
+  Clock
 } from 'lucide-react';
 
 interface Lead {
@@ -37,6 +39,13 @@ interface Lead {
   calls_count: number;
   whatsapp_count: number;
   last_contact?: string;
+  created_at: string;
+}
+
+interface LeadNote {
+  id: string;
+  lead_id: string;
+  content: string;
   created_at: string;
 }
 
@@ -67,6 +76,11 @@ export default function LeadsPage() {
   const [customMessage, setCustomMessage] = useState('');
   const [sendingWhatsApp, setSendingWhatsApp] = useState(false);
   const [waStatusFeedback, setWaStatusFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Modal Bitácora / Respuestas de WhatsApp
+  const [activeNotesLead, setActiveNotesLead] = useState<Lead | null>(null);
+  const [leadNotes, setLeadNotes] = useState<LeadNote[]>([]);
+  const [loadingNotes, setLoadingNotes] = useState(false);
 
   // Cargar datos
   const loadInitialData = async () => {
@@ -105,14 +119,57 @@ export default function LeadsPage() {
     loadInitialData();
   }, []);
 
-  // Abrir modal configurando teléfono y prefijo inteligente
+  // Cargar historial/notas de un lead específico
+  const openLeadHistory = async (lead: Lead) => {
+    setActiveNotesLead(lead);
+    setLoadingNotes(true);
+
+    const { data, error } = await supabase
+      .from('lead_notes')
+      .select('*')
+      .eq('lead_id', lead.id)
+      .order('created_at', { ascending: false });
+
+    if (!error && data) {
+      setLeadNotes(data);
+    } else {
+      setLeadNotes([]);
+    }
+    setLoadingNotes(false);
+  };
+
+  // Suscripción Realtime para notas nuevas (cuando Meta Webhook reciba respuesta)
+  useEffect(() => {
+    if (!activeNotesLead) return;
+
+    const channel = supabase
+      .channel(`realtime:lead_notes_${activeNotesLead.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'lead_notes',
+          filter: `lead_id=eq.${activeNotesLead.id}`,
+        },
+        (payload) => {
+          setLeadNotes((prev) => [payload.new as LeadNote, ...prev]);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [activeNotesLead]);
+
+  // Abrir modal de WhatsApp
   const openWhatsAppModal = (lead: Lead) => {
     setActiveWhatsAppLead(lead);
     setWaStatusFeedback(null);
 
     const digitsOnly = lead.phone.replace(/\D/g, '');
 
-    // Detección automática inicial: si empieza por 3 suele ser celular Colombia (+57), de lo contrario USA (+1)
     if (digitsOnly.startsWith('57')) {
       setCountryCode('57');
       setTargetPhone(digitsOnly.slice(2));
@@ -162,7 +219,6 @@ export default function LeadsPage() {
           text: `Mensaje transmitido exitosamente a +${data.targetPhone}. La bitácora fue actualizada.`,
         });
 
-        // Actualizar contador visualmente
         setLeads((prev) =>
           prev.map((l) =>
             l.id === activeWhatsAppLead.id
@@ -364,6 +420,7 @@ export default function LeadsPage() {
                         </div>
                       </td>
 
+                      {/* Contador 4+4 */}
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-2">
                           <span className="flex items-center gap-1 text-[11px] font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md">
@@ -391,6 +448,16 @@ export default function LeadsPage() {
 
                       <td className="py-3 px-4 text-right">
                         <div className="flex items-center justify-end gap-1">
+                          {/* Ver Historial / Bitácora de Respuestas */}
+                          <button
+                            onClick={() => openLeadHistory(lead)}
+                            className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                            title="Ver Historial & Respuestas"
+                          >
+                            <FileText className="w-4 h-4" />
+                          </button>
+
+                          {/* Llamada directa */}
                           <a
                             href={`tel:${lead.phone}`}
                             className="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
@@ -399,6 +466,7 @@ export default function LeadsPage() {
                             <Phone className="w-4 h-4" />
                           </a>
 
+                          {/* Enviar WhatsApp Oficial */}
                           <button
                             onClick={() => openWhatsAppModal(lead)}
                             className="p-1.5 text-slate-400 hover:text-sky-600 hover:bg-sky-50 rounded-lg transition-colors"
@@ -424,7 +492,85 @@ export default function LeadsPage() {
         </div>
       </div>
 
-      {/* MODAL DE ENVÍO CON SELECTOR DE PREFIJO EDITABLE */}
+      {/* MODAL DE HISTORIAL & CONVERSACIÓN DE WHATSAPP */}
+      {activeNotesLead && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-xl w-full p-5 shadow-2xl border border-slate-200 flex flex-col max-h-[85vh]">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-indigo-50 text-indigo-600">
+                  <FileText className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-slate-800">Historial & Respuestas de WhatsApp</h3>
+                  <p className="text-[11px] text-slate-500">
+                    Lead: <span className="font-semibold text-slate-700">{activeNotesLead.client_name}</span> ({activeNotesLead.phone})
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setActiveNotesLead(null)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto py-4 space-y-3">
+              {loadingNotes ? (
+                <div className="text-center py-10 text-xs text-slate-400">Cargando registros...</div>
+              ) : leadNotes.length === 0 ? (
+                <div className="text-center py-12 text-slate-400 text-xs space-y-1">
+                  <p className="font-semibold text-slate-600">Sin interacciones registradas</p>
+                  <p>Envía un mensaje o espera la respuesta del cliente.</p>
+                </div>
+              ) : (
+                leadNotes.map((note) => {
+                  const isIncoming = note.content.includes('[WhatsApp Entrante');
+                  const isOutgoing = note.content.includes('[WhatsApp Oficial Enviado');
+
+                  return (
+                    <div
+                      key={note.id}
+                      className={`p-3.5 rounded-xl border text-xs leading-relaxed ${
+                        isIncoming
+                          ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950 ml-4'
+                          : isOutgoing
+                          ? 'bg-sky-50/70 border-sky-200 text-sky-950 mr-4'
+                          : 'bg-slate-50 border-slate-200 text-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className={`text-[10px] font-bold uppercase tracking-wider ${
+                          isIncoming ? 'text-emerald-700' : isOutgoing ? 'text-sky-700' : 'text-slate-500'
+                        }`}>
+                          {isIncoming ? '📥 Respuesta de Cliente' : isOutgoing ? '📤 Mensaje Oficial Enviado' : 'Nota General'}
+                        </span>
+                        <span className="text-[10px] text-slate-400 flex items-center gap-1 font-mono">
+                          <Clock className="w-3 h-3" />
+                          {new Date(note.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short' })}
+                        </span>
+                      </div>
+                      <p className="whitespace-pre-wrap font-medium">{note.content}</p>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="border-t border-slate-100 pt-3 flex justify-end">
+              <button
+                onClick={() => setActiveNotesLead(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE ENVÍO CON SELECTOR DE PREFIJO */}
       {activeWhatsAppLead && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
           <div className="bg-white rounded-2xl max-w-lg w-full p-5 shadow-2xl border border-slate-200 space-y-4">
@@ -466,7 +612,6 @@ export default function LeadsPage() {
             )}
 
             <form onSubmit={handleSendOfficialWhatsApp} className="space-y-3">
-              {/* SELECTOR DE PAÍS Y TELÉFONO EDITABLE */}
               <div>
                 <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1.5">
                   Número de Destino & Código de País
