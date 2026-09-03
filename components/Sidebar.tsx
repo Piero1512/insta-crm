@@ -10,6 +10,7 @@ import {
   MapPin, 
   FileSpreadsheet, 
   UserCheck, 
+  MessageSquare,
   Settings,
   HardHat,
   X
@@ -22,6 +23,7 @@ const menuItems = [
   { name: 'Visitas en Sitio', href: '/visits', icon: MapPin },
   { name: 'Presupuestos', href: '/quotes', icon: FileSpreadsheet },
   { name: 'Equipo & Coordinadores', href: '/coordinators', icon: UserCheck },
+  { name: 'Mensajería Interna', href: '/messages', icon: MessageSquare },
   { name: 'Configuración', href: '/settings', icon: Settings },
 ];
 
