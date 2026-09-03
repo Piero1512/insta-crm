@@ -55,7 +55,7 @@ function playBeep() {
     osc.start();
     osc.stop(ctx.currentTime + 0.35);
   } catch {
-    // Silenciado o bloqueado por el navegador
+    // Audio bloqueado temporalmente por política del navegador
   }
 }
 
@@ -68,7 +68,7 @@ export default function MessagesPage() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
 
-  // Control de silencio
+  // Control de silencio guardado en localStorage
   const [isMuted, setIsMuted] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -212,12 +212,12 @@ export default function MessagesPage() {
     };
   }, [currentUser, profiles]);
 
-  // Auto-scroll
+  // Auto-scroll hacia el final
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, selectedRecipientId]);
 
-  // Filtrado de conversación
+  // Conversación activa filtrada
   const activeConversation = useMemo(() => {
     if (!currentUser) return [];
 
@@ -231,7 +231,7 @@ export default function MessagesPage() {
     );
   }, [messages, selectedRecipientId, currentUser]);
 
-  // Enviar mensaje autenticado
+  // Enviar mensaje
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputMessage.trim() || !currentUser) return;
@@ -285,7 +285,9 @@ export default function MessagesPage() {
               <span className="font-bold text-slate-800">
                 {currentUser ? `${currentUser.full_name} (${currentUser.role || 'Usuario'})` : 'Cargando...'}
               </span>
-              <ShieldCheck className="w-3.5 h-3.5 text-blue-600 ml-0.5" title="Perfil autenticado y protegido" />
+              <span title="Perfil autenticado y protegido">
+                <ShieldCheck className="w-3.5 h-3.5 text-blue-600 ml-0.5" />
+              </span>
             </div>
 
             {/* Silenciar/Activar Sonido */}
