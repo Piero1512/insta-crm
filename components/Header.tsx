@@ -12,14 +12,13 @@ import {
   LogOut, 
   MessageSquare, 
   UserPlus, 
-  Check, 
-  X,
-  Volume2,
-  VolumeX
+  Volume2, 
+  VolumeX 
 } from 'lucide-react';
 
 interface HeaderProps {
   onMenuClick?: () => void;
+  onToggleMenu?: () => void;
 }
 
 interface NotificationItem {
@@ -31,13 +30,15 @@ interface NotificationItem {
   created_at: string;
 }
 
-export default function Header({ onMenuClick }: HeaderProps) {
+export default function Header({ onMenuClick, onToggleMenu }: HeaderProps) {
   const router = useRouter();
   const [userEmail, setUserEmail] = useState<string>('');
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const handleMenuToggle = onToggleMenu || onMenuClick;
 
   useEffect(() => {
     initMobileAudioUnlock();
@@ -134,9 +135,9 @@ export default function Header({ onMenuClick }: HeaderProps) {
   return (
     <header className="h-16 bg-white border-b border-slate-200 px-4 sm:px-6 flex items-center justify-between sticky top-0 z-30">
       <div className="flex items-center gap-3">
-        {onMenuClick && (
+        {handleMenuToggle && (
           <button
-            onClick={onMenuClick}
+            onClick={handleMenuToggle}
             className="md:hidden p-2 text-slate-500 hover:text-slate-800 rounded-lg hover:bg-slate-100 transition-colors"
           >
             <Menu className="w-5 h-5" />
@@ -153,7 +154,7 @@ export default function Header({ onMenuClick }: HeaderProps) {
           <button
             onClick={() => {
               setIsOpen(!isOpen);
-              playNotificationSound(); // Prueba de audio inmediata al pulsar la campana
+              playNotificationSound();
             }}
             className={`p-2 rounded-xl border transition-colors relative ${
               isOpen ? 'bg-blue-50 border-blue-200 text-blue-600' : 'text-slate-500 hover:text-slate-800 border-transparent hover:bg-slate-100'
