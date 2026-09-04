@@ -1,6 +1,6 @@
 // app/api/whatsapp/send/route.ts
 import { NextResponse } from 'next/server';
-import { supabaseAdmin } from '@/lib/supabaseAdmin';
+import { supabase } from '@/lib/supabase';
 
 export async function POST(req: Request) {
   try {
@@ -50,7 +50,7 @@ export async function POST(req: Request) {
 
     let metaData = await metaResponse.json();
 
-    // Fallback de plantilla oficial si la ventana de 24h está cerrada
+    // Fallback de plantilla oficial
     if (!metaResponse.ok && (metaData.error?.code === 131047 || metaData.error?.code === 131005)) {
       payloadBody = {
         messaging_product: 'whatsapp',
@@ -82,10 +82,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: detail }, { status: metaResponse.status });
     }
 
-    // 2. Persistencia en Supabase mediante supabaseAdmin (Garantiza que el contador quede guardado)
+    // 2. Persistencia en Supabase
     if (leadId) {
-      // Registrar la nota
-      await supabaseAdmin.from('lead_notes').insert([
+      // Insertar en la bitácora
+      await supabase.from('lead_notes').insert([
         {
           lead_id: leadId,
           author_name: coordinatorName || 'Jean Epalza',
@@ -93,26 +93,27 @@ export async function POST(req: Request) {
         },
       ]);
 
-      // Consultar contador actual
-      const { data: lead } = await supabaseAdmin
+      // Consultar el valor actual del lead
+      const { data: leadData } = await supabase
         .from('leads')
         .select('whatsapp_count')
         .eq('id', leadId)
-        .single();
+        .maybeSingle();
 
-      const nextCount = (lead?.whatsapp_count ?? 0) + 1;
+      const currentVal = Number(leadData?.whatsapp_count) || 0;
+      const nextVal = currentVal + 1;
 
-      // Actualización definitiva en base de datos
-      const { error: updateError } = await supabaseAdmin
+      // Actualizar contador en la base de datos
+      const { error: updateErr } = await supabase
         .from('leads')
         .update({
-          whatsapp_count: nextCount,
+          whatsapp_count: nextVal,
           last_contact: new Date().toISOString(),
         })
         .eq('id', leadId);
 
-      if (updateError) {
-        console.error('Error actualizando contador en Supabase:', updateError);
+      if (updateErr) {
+        console.error('Error al actualizar contador:', updateErr);
       }
     }
 
