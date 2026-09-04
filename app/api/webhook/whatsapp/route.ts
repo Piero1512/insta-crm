@@ -27,30 +27,26 @@ export async function POST(req: Request) {
     const message = value?.messages?.[0];
 
     if (message && message.type === 'text') {
-      const fromPhone = message.from; // Ej: 573043456661
+      const fromPhone = String(message.from || ''); // ej: "573043456661"
       const textBody = message.text.body;
 
-      // Extraer los últimos 10 y 7 dígitos para máxima coincidencia
-      const last10Digits = fromPhone.slice(-10);
-      const last7Digits = fromPhone.slice(-7);
+      // Extraer últimos 7 dígitos
+      const cleanIncoming = fromPhone.replace(/\D/g, '');
+      const last7 = cleanIncoming.slice(-7);
 
-      // Traer todos los leads para hacer matching limpio contra dígitos puros
+      // Buscar el lead en la base de datos
       const { data: leads } = await supabaseAdmin
         .from('leads')
         .select('id, client_name, phone, assigned_to');
 
       const matchedLead = leads?.find((l) => {
         if (!l.phone) return false;
-        const cleanLeadPhone = l.phone.replace(/\D/g, '');
-        return (
-          cleanLeadPhone.endsWith(last10Digits) ||
-          cleanLeadPhone.endsWith(last7Digits) ||
-          fromPhone.includes(cleanLeadPhone)
-        );
+        const cleanDbPhone = l.phone.replace(/\D/g, '');
+        return cleanDbPhone.includes(last7) || cleanIncoming.includes(cleanDbPhone.slice(-7));
       });
 
       if (matchedLead) {
-        // 1. Guardar la respuesta del cliente en la bitácora
+        // 1. Guardar en la bitácora del lead
         await supabaseAdmin.from('lead_notes').insert([
           {
             lead_id: matchedLead.id,
@@ -59,24 +55,34 @@ export async function POST(req: Request) {
           },
         ]);
 
-        // 2. Notificación interna para el coordinador
+        // 2. Notificación interna
         if (matchedLead.assigned_to) {
           await supabaseAdmin.from('internal_messages').insert([
             {
               sender_id: matchedLead.assigned_to,
               receiver_id: matchedLead.assigned_to,
               lead_id: matchedLead.id,
-              content: `El cliente ${matchedLead.client_name} respondió a tu WhatsApp: "${textBody}"`,
+              content: `El cliente ${matchedLead.client_name} respondió por WhatsApp: "${textBody}"`,
               is_read: false,
             },
           ]);
         }
+      } else if (leads && leads.length > 0) {
+        // Fallback de seguridad: si no coincide el número, asociarlo al lead más reciente para no perder el mensaje
+        const fallbackLead = leads[0];
+        await supabaseAdmin.from('lead_notes').insert([
+          {
+            lead_id: fallbackLead.id,
+            author_name: `Remitente (+${cleanIncoming})`,
+            note: `📥 [WhatsApp Entrante de +${cleanIncoming}]: "${textBody}"`,
+          },
+        ]);
       }
     }
 
     return NextResponse.json({ status: 'EVENT_RECEIVED' });
   } catch (error) {
-    console.error('Error procesando webhook de WhatsApp:', error);
+    console.error('Error en webhook WhatsApp:', error);
     return NextResponse.json({ status: 'ERROR' }, { status: 500 });
   }
 }
