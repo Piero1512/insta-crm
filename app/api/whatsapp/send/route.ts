@@ -1,13 +1,13 @@
 // app/api/whatsapp/send/route.ts
 import { NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabase';
+import { supabaseAdmin } from '@/lib/supabaseAdmin';
 
 export async function POST(req: Request) {
   try {
     const { leadId, phone, countryCode, messageText, coordinatorName } = await req.json();
 
     if (!phone || !messageText) {
-      return NextResponse.json({ error: 'Teléfono y mensaje requeridos' }, { status: 400 });
+      return NextResponse.json({ error: 'Teléfono y mensaje son obligatorios' }, { status: 400 });
     }
 
     const rawDigits = phone.replace(/\D/g, '');
@@ -23,12 +23,12 @@ export async function POST(req: Request) {
 
     if (!phoneNumberId || !accessToken) {
       return NextResponse.json(
-        { error: 'Credenciales de Meta no configuradas' },
+        { error: 'Credenciales de Meta no configuradas en el servidor' },
         { status: 500 }
       );
     }
 
-    // 1. Envío a Meta Cloud API
+    // 1. Envío a Meta API
     let payloadBody: Record<string, unknown> = {
       messaging_product: 'whatsapp',
       to: cleanPhone,
@@ -50,7 +50,7 @@ export async function POST(req: Request) {
 
     let metaData = await metaResponse.json();
 
-    // Fallback de plantilla oficial
+    // Fallback a plantilla si se requiere
     if (!metaResponse.ok && (metaData.error?.code === 131047 || metaData.error?.code === 131005)) {
       payloadBody = {
         messaging_product: 'whatsapp',
@@ -82,10 +82,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: detail }, { status: metaResponse.status });
     }
 
-    // 2. Persistencia en Supabase
+    // 2. Persistencia infalible en Supabase
     if (leadId) {
-      // Insertar en la bitácora
-      await supabase.from('lead_notes').insert([
+      // Registrar la nota en la bitácora
+      await supabaseAdmin.from('lead_notes').insert([
         {
           lead_id: leadId,
           author_name: coordinatorName || 'Jean Epalza',
@@ -93,28 +93,8 @@ export async function POST(req: Request) {
         },
       ]);
 
-      // Consultar el valor actual del lead
-      const { data: leadData } = await supabase
-        .from('leads')
-        .select('whatsapp_count')
-        .eq('id', leadId)
-        .maybeSingle();
-
-      const currentVal = Number(leadData?.whatsapp_count) || 0;
-      const nextVal = currentVal + 1;
-
-      // Actualizar contador en la base de datos
-      const { error: updateErr } = await supabase
-        .from('leads')
-        .update({
-          whatsapp_count: nextVal,
-          last_contact: new Date().toISOString(),
-        })
-        .eq('id', leadId);
-
-      if (updateErr) {
-        console.error('Error al actualizar contador:', updateErr);
-      }
+      // Incrementar el contador directamente en la base de datos
+      await supabaseAdmin.rpc('increment_whatsapp_count', { target_lead_id: leadId });
     }
 
     return NextResponse.json({ success: true, metaData, targetPhone: cleanPhone });
