@@ -38,12 +38,11 @@ interface Lead {
   status: string;
   assigned_to?: string;
   calls_count: number;
-  whatsapp_count: number;
+  messages_count: number; // Columna oficial en Supabase
   last_contact?: string;
   created_at: string;
 }
 
-// Interfaz corregida con las columnas reales de Supabase ('note' y 'author_name')
 interface LeadNote {
   id: string;
   lead_id: string;
@@ -85,7 +84,6 @@ export default function LeadsPage() {
   const [leadNotes, setLeadNotes] = useState<LeadNote[]>([]);
   const [loadingNotes, setLoadingNotes] = useState(false);
 
-  // Cargar datos iniciales
   const loadInitialData = async () => {
     setLoading(true);
 
@@ -112,7 +110,7 @@ export default function LeadsPage() {
       .order('created_at', { ascending: false });
 
     if (leadsList) {
-      setLeads(leadsList);
+      setLeads(leadsList as Lead[]);
     }
 
     setLoading(false);
@@ -141,7 +139,7 @@ export default function LeadsPage() {
     setLoadingNotes(false);
   };
 
-  // Suscripción Realtime para notas nuevas (cuando Meta Webhook recibe respuesta)
+  // Suscripción Realtime para notas nuevas
   useEffect(() => {
     if (!activeNotesLead) return;
 
@@ -166,7 +164,7 @@ export default function LeadsPage() {
     };
   }, [activeNotesLead]);
 
-  // Preparar modal de WhatsApp
+  // Abrir modal WhatsApp
   const openWhatsAppModal = (lead: Lead) => {
     setActiveWhatsAppLead(lead);
     setWaStatusFeedback(null);
@@ -192,7 +190,7 @@ export default function LeadsPage() {
     );
   };
 
-  // Enviar mensaje oficial por Meta API
+  // Enviar mensaje oficial
   const handleSendOfficialWhatsApp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeWhatsAppLead || !customMessage.trim() || !targetPhone.trim()) return;
@@ -210,7 +208,7 @@ export default function LeadsPage() {
           countryCode: countryCode,
           messageText: customMessage.trim(),
           coordinatorId: currentProfile?.id,
-          coordinatorName: currentProfile?.full_name,
+          coordinatorName: currentProfile?.full_name || 'Jean Epalza',
         }),
       });
 
@@ -219,21 +217,21 @@ export default function LeadsPage() {
       if (res.ok && data.success) {
         setWaStatusFeedback({
           type: 'success',
-          text: `Mensaje transmitido exitosamente a +${data.targetPhone}. La bitácora fue actualizada.`,
+          text: `Mensaje transmitido exitosamente a +${data.targetPhone}.`,
         });
 
-        // Actualizar contador en la tabla local
+        // Actualizar contador usando messages_count
         setLeads((prev) =>
           prev.map((l) =>
             l.id === activeWhatsAppLead.id
-              ? { ...l, whatsapp_count: (l.whatsapp_count ?? 0) + 1, last_contact: new Date().toISOString() }
+              ? { ...l, messages_count: (Number(l.messages_count) || 0) + 1, last_contact: new Date().toISOString() }
               : l
           )
         );
 
         setTimeout(() => {
           setActiveWhatsAppLead(null);
-        }, 2000);
+        }, 1800);
       } else {
         setWaStatusFeedback({
           type: 'error',
@@ -250,7 +248,7 @@ export default function LeadsPage() {
     }
   };
 
-  // Filtrado de leads
+  // Filtrado
   const filteredLeads = useMemo(() => {
     return leads.filter((lead) => {
       const matchSearch =
@@ -274,7 +272,6 @@ export default function LeadsPage() {
   return (
     <AppLayout>
       <div className="space-y-6 max-w-7xl mx-auto">
-        {/* Cabecera */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl font-black text-slate-800 tracking-tight">Leads & Prospectos</h1>
@@ -325,7 +322,6 @@ export default function LeadsPage() {
               <option value="all">Canal: Todos</option>
               <option value="Web / SEO">Web / SEO</option>
               <option value="Meta Ads">Meta Ads</option>
-              <option value="Google LSA">Google LSA</option>
               <option value="Directo">Directo</option>
             </select>
 
@@ -337,7 +333,6 @@ export default function LeadsPage() {
               <option value="all">Estado: Todos</option>
               <option value="Nuevo">Nuevo</option>
               <option value="En Seguimiento">En Seguimiento</option>
-              <option value="Visita Agendada">Visita Agendada</option>
               <option value="Visita Realizada">Visita Realizada</option>
               <option value="Cerrado Ganado">Cerrado Ganado</option>
             </select>
@@ -356,7 +351,7 @@ export default function LeadsPage() {
           </div>
         </div>
 
-        {/* Tabla de Leads */}
+        {/* Tabla */}
         <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
           <div className="p-4 border-b border-slate-100 flex items-center justify-between">
             <span className="font-bold text-xs text-slate-800">Bandeja Inteligente de Leads</span>
@@ -387,18 +382,21 @@ export default function LeadsPage() {
                     <td colSpan={6} className="text-center py-12 text-slate-400">No se encontraron leads.</td>
                   </tr>
                 ) : (
-                  filteredLeads.map((lead) => (
-                    <tr key={lead.id} className="hover:bg-slate-50/70 transition-colors">
-                      <td className="py-3 px-4">
-                        <div className="font-bold text-slate-800">{lead.client_name}</div>
-                        <div className="text-[11px] text-slate-400">
-                          {lead.service_type} • <span className="text-slate-600 font-mono">{lead.phone}</span>
-                        </div>
-                      </td>
+                  filteredLeads.map((lead) => {
+                    const calls = Number(lead.calls_count) || 0;
+                    const messages = Number(lead.messages_count) || 0;
 
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-1.5 mb-1">
-                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                    return (
+                      <tr key={lead.id} className="hover:bg-slate-50/70 transition-colors">
+                        <td className="py-3 px-4">
+                          <div className="font-bold text-slate-800">{lead.client_name}</div>
+                          <div className="text-[11px] text-slate-400">
+                            {lead.service_type} • <span className="text-slate-600 font-mono">{lead.phone}</span>
+                          </div>
+                        </td>
+
+                        <td className="py-3 px-4">
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold mb-1 ${
                             lead.lead_score >= 80 
                               ? 'bg-rose-50 text-rose-600 border border-rose-100' 
                               : lead.lead_score >= 50
@@ -408,87 +406,88 @@ export default function LeadsPage() {
                             <Flame className="w-3 h-3" />
                             {lead.lead_temperature || 'Tibio'} ({lead.lead_score || 50})
                           </span>
-                        </div>
-                        <span className="text-[10px] text-slate-400 bg-slate-100 px-2 py-0.5 rounded">
-                          {lead.origin_channel || 'Directo'}
-                        </span>
-                      </td>
+                          <div>
+                            <span className="text-[10px] text-slate-400 bg-slate-100 px-2 py-0.5 rounded">
+                              {lead.origin_channel || 'Directo'}
+                            </span>
+                          </div>
+                        </td>
 
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-1 text-slate-600 font-medium">
-                          <MapPin className="w-3 h-3 text-slate-400" />
-                          <span>{lead.county} {lead.zip_code ? `(${lead.zip_code})` : ''}</span>
-                        </div>
-                        <div className="text-[10px] text-slate-400">
-                          Presupuesto: {lead.estimated_value ? `$${lead.estimated_value.toLocaleString()}` : '< 5k'}
-                        </div>
-                      </td>
+                        <td className="py-3 px-4">
+                          <div className="flex items-center gap-1 text-slate-600 font-medium">
+                            <MapPin className="w-3 h-3 text-slate-400" />
+                            <span>{lead.county} {lead.zip_code ? `(${lead.zip_code})` : ''}</span>
+                          </div>
+                          <div className="text-[10px] text-slate-400">
+                            Presupuesto: {lead.estimated_value ? `$${lead.estimated_value.toLocaleString()}` : '< 5k'}
+                          </div>
+                        </td>
 
-                      {/* Contador 4+4 */}
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-2">
-                          <span className="flex items-center gap-1 text-[11px] font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md">
-                            <Phone className="w-3 h-3 text-emerald-600" /> {lead.calls_count ?? 0}/4
-                          </span>
-                          <span className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-md ${
-                            (lead.whatsapp_count ?? 0) >= 4 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-700'
+                        {/* CONTADORES LEYENDO MESSAGES_COUNT */}
+                        <td className="py-3 px-4">
+                          <div className="flex items-center gap-2">
+                            <span className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-md ${
+                              calls >= 4 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-700'
+                            }`}>
+                              <Phone className="w-3 h-3 text-emerald-600" /> {calls}/4
+                            </span>
+                            <span className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-md ${
+                              messages >= 4 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-700'
+                            }`}>
+                              <MessageSquare className="w-3 h-3 text-sky-600" /> {messages}/4
+                            </span>
+                          </div>
+                        </td>
+
+                        <td className="py-3 px-4">
+                          <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
+                            lead.status === 'Cerrado Ganado' || lead.status === 'cerrado_ganado'
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              : lead.status === 'Visita Realizada' || lead.status === 'visita_realizada'
+                              ? 'bg-sky-50 text-sky-700 border border-sky-200'
+                              : 'bg-blue-50 text-blue-700 border border-blue-200'
                           }`}>
-                            <MessageSquare className="w-3 h-3 text-sky-600" /> {lead.whatsapp_count ?? 0}/4
+                            {lead.status || 'Nuevo'}
                           </span>
-                        </div>
-                      </td>
+                        </td>
 
-                      <td className="py-3 px-4">
-                        <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
-                          lead.status === 'Cerrado Ganado'
-                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                            : lead.status === 'Visita Realizada'
-                            ? 'bg-sky-50 text-sky-700 border border-sky-200'
-                            : 'bg-blue-50 text-blue-700 border border-blue-200'
-                        }`}>
-                          {lead.status || 'Nuevo'}
-                        </span>
-                      </td>
+                        <td className="py-3 px-4 text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              onClick={() => openLeadHistory(lead)}
+                              className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                              title="Ver Bitácora & Historial"
+                            >
+                              <FileText className="w-4 h-4" />
+                            </button>
 
-                      <td className="py-3 px-4 text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          {/* BOTÓN 1: Historial y respuestas del cliente */}
-                          <button
-                            onClick={() => openLeadHistory(lead)}
-                            className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
-                            title="Ver Bitácora & Respuestas de WhatsApp"
-                          >
-                            <FileText className="w-4 h-4" />
-                          </button>
+                            <a
+                              href={`tel:${lead.phone}`}
+                              className="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                              title="Llamar"
+                            >
+                              <Phone className="w-4 h-4" />
+                            </a>
 
-                          {/* BOTÓN 2: Llamada rápida */}
-                          <a
-                            href={`tel:${lead.phone}`}
-                            className="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                            title="Llamar teléfono"
-                          >
-                            <Phone className="w-4 h-4" />
-                          </a>
+                            <button
+                              onClick={() => openWhatsAppModal(lead)}
+                              className="p-1.5 text-slate-400 hover:text-sky-600 hover:bg-sky-50 rounded-lg transition-colors"
+                              title="Enviar WhatsApp Oficial"
+                            >
+                              <MessageSquare className="w-4 h-4" />
+                            </button>
 
-                          {/* BOTÓN 3: Enviar WhatsApp Oficial Meta */}
-                          <button
-                            onClick={() => openWhatsAppModal(lead)}
-                            className="p-1.5 text-slate-400 hover:text-sky-600 hover:bg-sky-50 rounded-lg transition-colors"
-                            title="Enviar WhatsApp Oficial"
-                          >
-                            <MessageSquare className="w-4 h-4" />
-                          </button>
-
-                          <button className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
-                            <Edit3 className="w-4 h-4" />
-                          </button>
-                          <button className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors">
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                            <button className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                              <Edit3 className="w-4 h-4" />
+                            </button>
+                            <button className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -496,7 +495,7 @@ export default function LeadsPage() {
         </div>
       </div>
 
-      {/* MODAL DE HISTORIAL & RESPUESTAS ENTRANTES */}
+      {/* Modal Historial */}
       {activeNotesLead && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
           <div className="bg-white rounded-2xl max-w-xl w-full p-5 shadow-2xl border border-slate-200 flex flex-col max-h-[85vh]">
@@ -506,7 +505,7 @@ export default function LeadsPage() {
                   <FileText className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-sm text-slate-800">Historial & Respuestas de WhatsApp</h3>
+                  <h3 className="font-bold text-sm text-slate-800">Historial & Respuestas</h3>
                   <p className="text-[11px] text-slate-500">
                     Lead: <span className="font-semibold text-slate-700">{activeNotesLead.client_name}</span> ({activeNotesLead.phone})
                   </p>
@@ -525,8 +524,7 @@ export default function LeadsPage() {
                 <div className="text-center py-10 text-xs text-slate-400">Cargando bitácora...</div>
               ) : leadNotes.length === 0 ? (
                 <div className="text-center py-12 text-slate-400 text-xs space-y-1">
-                  <p className="font-semibold text-slate-600">Sin notas o interacciones registradas</p>
-                  <p>Envía un WhatsApp oficial o espera la respuesta del cliente.</p>
+                  <p className="font-semibold text-slate-600">Sin notas registradas</p>
                 </div>
               ) : (
                 leadNotes.map((item) => {
@@ -576,7 +574,7 @@ export default function LeadsPage() {
         </div>
       )}
 
-      {/* MODAL DE ENVÍO WHATSAPP OFICIAL META */}
+      {/* Modal WhatsApp */}
       {activeWhatsAppLead && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
           <div className="bg-white rounded-2xl max-w-lg w-full p-5 shadow-2xl border border-slate-200 space-y-4">
@@ -636,7 +634,7 @@ export default function LeadsPage() {
                     type="text"
                     value={targetPhone}
                     onChange={(e) => setTargetPhone(e.target.value)}
-                    placeholder="Ej. 3043456661"
+                    placeholder="Ej. 3017260165"
                     className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:border-sky-500"
                   />
                 </div>
@@ -654,29 +652,22 @@ export default function LeadsPage() {
                   value={customMessage}
                   onChange={(e) => setCustomMessage(e.target.value)}
                   className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-sky-500 leading-relaxed"
-                  placeholder="Escribe el mensaje para el cliente..."
+                  placeholder="Escribe el mensaje..."
                 />
-              </div>
-
-              <div className="bg-sky-50/60 p-3 rounded-xl border border-sky-100 text-[11px] text-sky-800 space-y-1">
-                <p className="font-semibold">Auditoría Automática Activa:</p>
-                <p className="text-slate-600">
-                  Al confirmar, el CRM transmitirá el mensaje por Meta API, incrementará el contador a <strong>{((activeWhatsAppLead.whatsapp_count ?? 0) + 1)}/4</strong> y guardará la copia en la bitácora del lead.
-                </p>
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-2">
                 <button
                   type="button"
                   onClick={() => setActiveWhatsAppLead(null)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors"
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={sendingWhatsApp || !customMessage.trim() || !targetPhone.trim()}
-                  className="px-5 py-2 bg-sky-600 hover:bg-sky-700 disabled:bg-slate-200 text-white text-xs font-bold rounded-xl shadow-xs flex items-center gap-1.5 transition-colors"
+                  className="px-5 py-2 bg-sky-600 hover:bg-sky-700 disabled:bg-slate-200 text-white text-xs font-bold rounded-xl shadow-xs flex items-center gap-1.5"
                 >
                   <Send className="w-3.5 h-3.5" />
                   <span>{sendingWhatsApp ? 'Transmitiendo...' : 'Enviar Mensaje Oficial'}</span>

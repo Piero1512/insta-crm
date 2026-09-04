@@ -7,7 +7,7 @@ export async function POST(req: Request) {
     const { leadId, phone, countryCode, messageText, coordinatorName } = await req.json();
 
     if (!phone || !messageText) {
-      return NextResponse.json({ error: 'Teléfono y mensaje son obligatorios' }, { status: 400 });
+      return NextResponse.json({ error: 'Teléfono y mensaje requeridos' }, { status: 400 });
     }
 
     const rawDigits = phone.replace(/\D/g, '');
@@ -23,12 +23,12 @@ export async function POST(req: Request) {
 
     if (!phoneNumberId || !accessToken) {
       return NextResponse.json(
-        { error: 'Credenciales de Meta no configuradas en el servidor' },
+        { error: 'Credenciales de Meta no configuradas' },
         { status: 500 }
       );
     }
 
-    // 1. Envío a Meta API
+    // 1. Envío a Meta Cloud API
     let payloadBody: Record<string, unknown> = {
       messaging_product: 'whatsapp',
       to: cleanPhone,
@@ -50,7 +50,7 @@ export async function POST(req: Request) {
 
     let metaData = await metaResponse.json();
 
-    // Fallback a plantilla si se requiere
+    // Fallback template si la ventana está cerrada
     if (!metaResponse.ok && (metaData.error?.code === 131047 || metaData.error?.code === 131005)) {
       payloadBody = {
         messaging_product: 'whatsapp',
@@ -82,9 +82,8 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: detail }, { status: metaResponse.status });
     }
 
-    // 2. Persistencia infalible en Supabase
+    // 2. Persistencia en Supabase usando messages_count
     if (leadId) {
-      // Registrar la nota en la bitácora
       await supabaseAdmin.from('lead_notes').insert([
         {
           lead_id: leadId,
@@ -93,8 +92,22 @@ export async function POST(req: Request) {
         },
       ]);
 
-      // Incrementar el contador directamente en la base de datos
-      await supabaseAdmin.rpc('increment_whatsapp_count', { target_lead_id: leadId });
+      // Consultar el valor actual de messages_count
+      const { data: lead } = await supabaseAdmin
+        .from('leads')
+        .select('messages_count')
+        .eq('id', leadId)
+        .single();
+
+      const currentCount = Number(lead?.messages_count) || 0;
+
+      // Actualizar messages_count en Supabase
+      await supabaseAdmin
+        .from('leads')
+        .update({
+          messages_count: currentCount + 1,
+        })
+        .eq('id', leadId);
     }
 
     return NextResponse.json({ success: true, metaData, targetPhone: cleanPhone });

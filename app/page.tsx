@@ -38,7 +38,7 @@ interface Lead {
   status: string;
   assigned_to?: string;
   calls_count: number;
-  whatsapp_count: number;
+  messages_count: number; // Columna oficial en Supabase
   last_contact?: string;
   created_at: string;
 }
@@ -103,14 +103,13 @@ export default function DashboardPage() {
       }
     }
 
-    // Traer leads reales desde Supabase ordenados por creación
     const { data: leadsList } = await supabase
       .from('leads')
       .select('*')
       .order('created_at', { ascending: false });
 
     if (leadsList) {
-      setLeads(leadsList);
+      setLeads(leadsList as Lead[]);
     }
 
     setLoading(false);
@@ -191,14 +190,14 @@ export default function DashboardPage() {
       if (res.ok && data.success) {
         setWaStatusFeedback({
           type: 'success',
-          text: `Mensaje transmitido exitosamente a +${data.targetPhone}. La bitácora y el contador se actualizaron.`,
+          text: `Mensaje transmitido exitosamente a +${data.targetPhone}.`,
         });
 
-        // Actualizar el estado local para reflejar el cambio de inmediato
+        // Actualizar contador usando messages_count
         setLeads((prev) =>
           prev.map((l) =>
             l.id === activeWhatsAppLead.id
-              ? { ...l, whatsapp_count: (Number(l.whatsapp_count) || 0) + 1, last_contact: new Date().toISOString() }
+              ? { ...l, messages_count: (Number(l.messages_count) || 0) + 1, last_contact: new Date().toISOString() }
               : l
           )
         );
@@ -242,7 +241,6 @@ export default function DashboardPage() {
   return (
     <AppLayout>
       <div className="space-y-6 max-w-7xl mx-auto">
-        {/* Encabezado */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl font-black text-slate-800 tracking-tight">Leads & Prospectos</h1>
@@ -310,7 +308,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Tabla sincronizada con Supabase */}
+        {/* Tabla sincronizada */}
         <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
           <div className="p-4 border-b border-slate-100 flex items-center justify-between">
             <span className="font-bold text-xs text-slate-800">Bandeja Inteligente de Leads</span>
@@ -343,7 +341,7 @@ export default function DashboardPage() {
                 ) : (
                   filteredLeads.map((lead) => {
                     const calls = Number(lead.calls_count) || 0;
-                    const wa = Number(lead.whatsapp_count) || 0;
+                    const messages = Number(lead.messages_count) || 0;
 
                     return (
                       <tr key={lead.id} className="hover:bg-slate-50/70 transition-colors">
@@ -382,7 +380,7 @@ export default function DashboardPage() {
                           </div>
                         </td>
 
-                        {/* CONTADORES REALES DINÁMICOS SIN HARDCODE */}
+                        {/* CONTADORES SIN HARDCODE LEYENDO MESSAGES_COUNT */}
                         <td className="py-3 px-4">
                           <div className="flex items-center gap-2">
                             <span className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-md ${
@@ -391,18 +389,18 @@ export default function DashboardPage() {
                               <Phone className="w-3 h-3 text-emerald-600" /> {calls}/4
                             </span>
                             <span className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-md ${
-                              wa >= 4 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-700'
+                              messages >= 4 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-700'
                             }`}>
-                              <MessageSquare className="w-3 h-3 text-sky-600" /> {wa}/4
+                              <MessageSquare className="w-3 h-3 text-sky-600" /> {messages}/4
                             </span>
                           </div>
                         </td>
 
                         <td className="py-3 px-4">
                           <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
-                            lead.status === 'Cerrado Ganado'
+                            lead.status === 'Cerrado Ganado' || lead.status === 'cerrado_ganado'
                               ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                              : lead.status === 'Visita Realizada'
+                              : lead.status === 'Visita Realizada' || lead.status === 'visita_realizada'
                               ? 'bg-sky-50 text-sky-700 border border-sky-200'
                               : 'bg-blue-50 text-blue-700 border border-blue-200'
                           }`}>
@@ -412,7 +410,6 @@ export default function DashboardPage() {
 
                         <td className="py-3 px-4 text-right">
                           <div className="flex items-center justify-end gap-1">
-                            {/* Ver Bitácora & Conversaciones */}
                             <button
                               onClick={() => openLeadHistory(lead)}
                               className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
@@ -421,7 +418,6 @@ export default function DashboardPage() {
                               <FileText className="w-4 h-4" />
                             </button>
 
-                            {/* Enviar WhatsApp Oficial */}
                             <button
                               onClick={() => openWhatsAppModal(lead)}
                               className="p-1.5 text-slate-400 hover:text-sky-600 hover:bg-sky-50 rounded-lg transition-colors"
@@ -527,7 +523,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Modal Envío WhatsApp */}
+      {/* Modal WhatsApp */}
       {activeWhatsAppLead && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
           <div className="bg-white rounded-2xl max-w-lg w-full p-5 shadow-2xl border border-slate-200 space-y-4">
